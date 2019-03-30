@@ -17,6 +17,7 @@
 #include "AP_AHRS.h"
 #include "AP_AHRS_View.h"
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Logger/AP_Logger.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -94,7 +95,7 @@ const AP_Param::GroupInfo AP_AHRS::var_info[] = {
     // @Param: ORIENTATION
     // @DisplayName: Board Orientation
     // @Description: Overall board orientation relative to the standard orientation for the board type. This rotates the IMU and compass readings to allow the board to be oriented in your vehicle at any 90 or 45 degree angle. This option takes affect on next boot. After changing you will need to re-level your vehicle.
-    // @Values: 0:None,1:Yaw45,2:Yaw90,3:Yaw135,4:Yaw180,5:Yaw225,6:Yaw270,7:Yaw315,8:Roll180,9:Roll180Yaw45,10:Roll180Yaw90,11:Roll180Yaw135,12:Pitch180,13:Roll180Yaw225,14:Roll180Yaw270,15:Roll180Yaw315,16:Roll90,17:Roll90Yaw45,18:Roll90Yaw90,19:Roll90Yaw135,20:Roll270,21:Roll270Yaw45,22:Roll270Yaw90,23:Roll270Yaw136,24:Pitch90,25:Pitch270,26:Pitch180Yaw90,27:Pitch180Yaw270,28:Roll90Pitch90,29:Roll180Pitch90,30:Roll270Pitch90,31:Roll90Pitch180,32:Roll270Pitch180,33:Roll90Pitch270,34:Roll180Pitch270,35:Roll270Pitch270,36:Roll90Pitch180Yaw90,37:Roll90Yaw270
+    // @Values: 0:None,1:Yaw45,2:Yaw90,3:Yaw135,4:Yaw180,5:Yaw225,6:Yaw270,7:Yaw315,8:Roll180,9:Roll180Yaw45,10:Roll180Yaw90,11:Roll180Yaw135,12:Pitch180,13:Roll180Yaw225,14:Roll180Yaw270,15:Roll180Yaw315,16:Roll90,17:Roll90Yaw45,18:Roll90Yaw90,19:Roll90Yaw135,20:Roll270,21:Roll270Yaw45,22:Roll270Yaw90,23:Roll270Yaw135,24:Pitch90,25:Pitch270,26:Pitch180Yaw90,27:Pitch180Yaw270,28:Roll90Pitch90,29:Roll180Pitch90,30:Roll270Pitch90,31:Roll90Pitch180,32:Roll270Pitch180,33:Roll90Pitch270,34:Roll180Pitch270,35:Roll270Pitch270,36:Roll90Pitch180Yaw90,37:Roll90Yaw270,38:Yaw293Pitch68Roll180,39:Pitch315,40:Roll90Pitch315,100:Custom
     // @User: Advanced
     AP_GROUPINFO("ORIENTATION", 9, AP_AHRS, _board_orientation, 0),
 
@@ -128,6 +129,33 @@ const AP_Param::GroupInfo AP_AHRS::var_info[] = {
     AP_GROUPINFO("EKF_TYPE",  14, AP_AHRS, _ekf_type, 2),
 #endif
 
+    // @Param: CUSTOM_ROLL
+    // @DisplayName: Board orientation roll offset
+    // @Description: Autopilot mounting position roll offset. Positive values = roll right, negative values = roll left. This parameter is only used when AHRS_ORIENTATION is set to CUSTOM.
+    // @Range: -180 180
+    // @Units: deg
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("CUSTOM_ROLL", 15, AP_AHRS, _custom_roll, 0),
+
+    // @Param: CUSTOM_PIT
+    // @DisplayName: Board orientation pitch offset
+    // @Description: Autopilot mounting position pitch offset. Positive values = pitch up, negative values = pitch down. This parameter is only used when AHRS_ORIENTATION is set to CUSTOM.
+    // @Range: -180 180
+    // @Units: deg
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("CUSTOM_PIT", 16, AP_AHRS, _custom_pitch, 0),
+
+    // @Param: CUSTOM_YAW
+    // @DisplayName: Board orientation yaw offset
+    // @Description: Autopilot mounting position yaw offset. Positive values = yaw right, negative values = yaw left. This parameter is only used when AHRS_ORIENTATION is set to CUSTOM.
+    // @Range: -180 180
+    // @Units: deg
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("CUSTOM_YAW", 17, AP_AHRS, _custom_yaw, 0),
+
     AP_GROUPEND
 };
 
@@ -135,7 +163,7 @@ const AP_Param::GroupInfo AP_AHRS::var_info[] = {
 Vector3f AP_AHRS::get_gyro_latest(void) const
 {
     const uint8_t primary_gyro = get_primary_gyro_index();
-    return get_ins().get_gyro(primary_gyro) + get_gyro_drift();
+    return AP::ins().get_gyro(primary_gyro) + get_gyro_drift();
 }
 
 // return airspeed estimate if available
@@ -159,7 +187,7 @@ bool AP_AHRS::airspeed_estimate(float *airspeed_ret) const
 }
 
 // set_trim
-void AP_AHRS::set_trim(Vector3f new_trim)
+void AP_AHRS::set_trim(const Vector3f &new_trim)
 {
     Vector3f trim;
     trim.x = constrain_float(new_trim.x, ToRad(-AP_AHRS_TRIM_LIMIT), ToRad(AP_AHRS_TRIM_LIMIT));
@@ -185,19 +213,37 @@ void AP_AHRS::add_trim(float roll_in_radians, float pitch_in_radians, bool save_
     }
 }
 
+// Set the board mounting orientation, may be called while disarmed
+void AP_AHRS::update_orientation()
+{
+    const enum Rotation orientation = (enum Rotation)_board_orientation.get();
+    if (orientation != ROTATION_CUSTOM) {
+        AP::ins().set_board_orientation(orientation);
+        if (_compass != nullptr) {
+            _compass->set_board_orientation(orientation);
+        }
+    } else {
+        _custom_rotation.from_euler(_custom_roll, _custom_pitch, _custom_yaw);
+        AP::ins().set_board_orientation(orientation, &_custom_rotation);
+        if (_compass != nullptr) {
+            _compass->set_board_orientation(orientation, &_custom_rotation);
+        }
+    }
+}
+
 // return a ground speed estimate in m/s
 Vector2f AP_AHRS::groundspeed_vector(void)
 {
     // Generate estimate of ground speed vector using air data system
     Vector2f gndVelADS;
     Vector2f gndVelGPS;
-    float airspeed;
+    float airspeed = 0;
     const bool gotAirspeed = airspeed_estimate_true(&airspeed);
     const bool gotGPS = (AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D);
     if (gotAirspeed) {
         const Vector3f wind = wind_estimate();
         const Vector2f wind2d(wind.x, wind.y);
-        const Vector2f airspeed_vector(cosf(yaw) * airspeed, sinf(yaw) * airspeed);
+        const Vector2f airspeed_vector(_cos_yaw * airspeed, _sin_yaw * airspeed);
         gndVelADS = airspeed_vector - wind2d;
     }
 
@@ -235,6 +281,20 @@ Vector2f AP_AHRS::groundspeed_vector(void)
     if (!gotAirspeed && gotGPS) {
         return gndVelGPS;
     }
+
+    if (airspeed > 0) {
+        // we have a rough airspeed, and we have a yaw. For
+        // dead-reckoning purposes we can create a estimated
+        // groundspeed vector
+        Vector2f ret(cosf(yaw), sinf(yaw));
+        ret *= airspeed;
+        // adjust for estimated wind
+        const Vector3f wind = wind_estimate();
+        ret.x += wind.x;
+        ret.y += wind.y;
+        return ret;
+    }
+
     return Vector2f(0.0f, 0.0f);
 }
 
@@ -313,15 +373,15 @@ void AP_AHRS::update_cd_values(void)
 }
 
 /*
-  create a rotated view of AP_AHRS
+  create a rotated view of AP_AHRS with optional pitch trim
  */
-AP_AHRS_View *AP_AHRS::create_view(enum Rotation rotation)
+AP_AHRS_View *AP_AHRS::create_view(enum Rotation rotation, float pitch_trim_deg)
 {
     if (_view != nullptr) {
         // can only have one
         return nullptr;
     }
-    _view = new AP_AHRS_View(*this, rotation);
+    _view = new AP_AHRS_View(*this, rotation, pitch_trim_deg);
     return _view;
 }
 
@@ -410,4 +470,36 @@ Vector2f AP_AHRS::rotate_body_to_earth2D(const Vector2f &bf) const
 {
     return Vector2f(bf.x * _cos_yaw - bf.y * _sin_yaw,
                     bf.x * _sin_yaw + bf.y * _cos_yaw);
+}
+
+// log ahrs home and EKF origin
+void AP_AHRS::Log_Write_Home_And_Origin()
+{
+    AP_Logger *logger = AP_Logger::get_singleton();
+    if (logger == nullptr) {
+        return;
+    }
+#if AP_AHRS_NAVEKF_AVAILABLE
+    Location ekf_orig;
+    if (get_origin(ekf_orig)) {
+        logger->Write_Origin(LogOriginType::ekf_origin, ekf_orig);
+    }
+#endif
+
+    if (home_is_set()) {
+        logger->Write_Origin(LogOriginType::ahrs_home, _home);
+    }
+}
+
+
+// singleton instance
+AP_AHRS *AP_AHRS::_singleton;
+
+namespace AP {
+
+AP_AHRS &ahrs()
+{
+    return *AP_AHRS::get_singleton();
+}
+
 }

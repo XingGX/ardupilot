@@ -2,6 +2,12 @@
 
 #include <AP_Common/AP_Common.h>
 
+#include <AP_Gripper/AP_Gripper.h>
+
+#ifdef ENABLE_SCRIPTING
+#include <AP_Scripting/AP_Scripting.h>
+#endif
+
 // Global parameter class.
 //
 class Parameters {
@@ -15,15 +21,6 @@ public:
     // by newer code.
     //
     static const uint16_t        k_format_version = 1;
-
-    // The parameter software_type is set up solely for ground station use
-    // and identifies the software type (eg ArduPilotMega versus
-    // ArduCopterMega)
-    // GCS will interpret values 0-9 as ArduPilotMega.  Developers may use
-    // values within that range to identify different branches.
-    //
-    static const uint16_t        k_software_type = 40;          // 0 for APM
-    // trunk
 
     // Parameter identities.
     //
@@ -48,7 +45,7 @@ public:
         // Layout version number, always key zero.
         //
         k_param_format_version = 0,
-        k_param_software_type,
+        k_param_software_type, // unusued
 
         k_param_g2, // 2nd block of parameters
 
@@ -65,7 +62,7 @@ public:
         // Hardware/Software configuration
         k_param_BoardConfig = 20, // Board configuration (PX4/Linux/etc)
         k_param_scheduler, // Scheduler (for debugging/perf_info)
-        k_param_DataFlash, // DataFlash Logging
+        k_param_logger, // AP_Logger Logging
         k_param_serial_manager, // Serial ports, AP_SerialManager
         k_param_notify, // Notify Library, AP_Notify
         k_param_arming = 26, // Arming checks
@@ -96,6 +93,7 @@ public:
         k_param_circle_nav, // Disabled
         k_param_avoid, // Relies on proximity and fence
         k_param_NavEKF3,
+        k_param_loiter_nav,
 
 
         // Other external hardware interfaces
@@ -167,9 +165,9 @@ public:
         k_param_fs_ekf_thresh,
         k_param_fs_ekf_action,
         k_param_fs_crash_check,
-        k_param_failsafe_battery_enabled,
-        k_param_fs_batt_mah,
-        k_param_fs_batt_voltage,
+        k_param_failsafe_battery_enabled, // unused - moved to AP_BattMonitor
+        k_param_fs_batt_mah,              // unused - moved to AP_BattMonitor
+        k_param_fs_batt_voltage,          // unused - moved to AP_BattMonitor
         k_param_failsafe_pilot_input,
         k_param_failsafe_pilot_input_timeout,
 
@@ -215,7 +213,6 @@ public:
     };
 
     AP_Int16        format_version;
-    AP_Int8         software_type;
 
     // Telemetry control
     //
@@ -224,11 +221,9 @@ public:
 
     AP_Float        throttle_filt;
 
+#if RANGEFINDER_ENABLED == ENABLED
     AP_Float        rangefinder_gain;
-
-    AP_Int8         failsafe_battery_enabled;   // battery failsafe enabled
-    AP_Float        fs_batt_voltage;            // battery voltage below which failsafe will be triggered
-    AP_Float        fs_batt_mah;                // battery capacity (in mah) below which failsafe will be triggered
+#endif
 
     AP_Int8         failsafe_leak;              // leak detection failsafe behavior
     AP_Int8         failsafe_gcs;               // ground station failsafe behavior
@@ -266,7 +261,9 @@ public:
     AP_Float        fs_ekf_thresh;
     AP_Int16        gcs_pid_mask;
 
+#if AP_TERRAIN_AVAILABLE && AC_TERRAIN
     AP_Int8         terrain_follow;
+#endif
 
     AP_Int16        rc_speed; // speed of fast RC Channels in Hz
 
@@ -334,10 +331,15 @@ public:
 #endif
 
     // RC input channels
-    RC_Channels rc_channels;
+    RC_Channels_Sub rc_channels;
 
     // control over servo output ranges
     SRV_Channels servo_channels;
+
+#ifdef ENABLE_SCRIPTING
+    AP_Scripting scripting;
+#endif // ENABLE_SCRIPTING
+
 };
 
 extern const AP_Param::Info        var_info[];

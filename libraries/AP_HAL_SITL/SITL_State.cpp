@@ -63,12 +63,9 @@ void SITL_State::_sitl_setup(const char *home_str)
 {
     _home_str = home_str;
 
-#ifndef __CYGWIN__
+#if !defined(__CYGWIN__) && !defined(__CYGWIN64__)
     _parent_pid = getppid();
 #endif
-    _rcout_addr.sin_family = AF_INET;
-    _rcout_addr.sin_port = htons(_rcout_port);
-    inet_pton(AF_INET, _fdm_address, &_rcout_addr.sin_addr);
 
 #ifndef HIL_MODE
     _setup_fdm();
@@ -76,12 +73,12 @@ void SITL_State::_sitl_setup(const char *home_str)
     fprintf(stdout, "Starting SITL input\n");
 
     // find the barometer object if it exists
-    _sitl = (SITL::SITL *)AP_Param::find_object("SIM_");
-    _barometer = (AP_Baro *)AP_Param::find_object("GND_");
-    _ins = (AP_InertialSensor *)AP_Param::find_object("INS_");
-    _compass = (Compass *)AP_Param::find_object("COMPASS_");
+    _sitl = AP::sitl();
+    _barometer = AP_Baro::get_singleton();
+    _ins = AP_InertialSensor::get_singleton();
+    _compass = Compass::get_singleton();
 #if AP_TERRAIN_AVAILABLE
-    _terrain = (AP_Terrain *)AP_Param::find_object("TERRAIN_");
+    _terrain = reinterpret_cast<AP_Terrain *>(AP_Param::find_object("TERRAIN_"));
 #endif
 
     if (_sitl != nullptr) {
@@ -95,8 +92,14 @@ void SITL_State::_sitl_setup(const char *home_str)
             gimbal = new SITL::Gimbal(_sitl->state);
         }
 
+        sitl_model->set_sprayer(&_sitl->sprayer_sim);
+        sitl_model->set_gripper_servo(&_sitl->gripper_sim);
+        sitl_model->set_gripper_epm(&_sitl->gripper_epm_sim);
+        sitl_model->set_parachute(&_sitl->parachute_sim);
+        sitl_model->set_precland(&_sitl->precland_sim);
+
         if (_use_fg_view) {
-            fg_socket.connect("127.0.0.1", _fg_view_port);
+            fg_socket.connect(_fg_address, _fg_view_port);
         }
 
         fprintf(stdout, "Using Irlock at port : %d\n", _irlock_port);
@@ -116,13 +119,26 @@ void SITL_State::_sitl_setup(const char *home_str)
  */
 void SITL_State::_setup_fdm(void)
 {
-    if (!_sitl_rc_in.bind("0.0.0.0", _rcin_port)) {
-        fprintf(stderr, "SITL: socket bind failed on RC in port : %d - %s\n", _rcin_port, strerror(errno));
-        fprintf(stderr, "Abording launch...\n");
+    if (!_sitl_rc_in.reuseaddress()) {
+        fprintf(stderr, "SITL: socket reuseaddress failed on RC in port: %d - %s\n", _rcin_port, strerror(errno));
+        fprintf(stderr, "Aborting launch...\n");
         exit(1);
     }
-    _sitl_rc_in.reuseaddress();
-    _sitl_rc_in.set_blocking(false);
+    if (!_sitl_rc_in.bind("0.0.0.0", _rcin_port)) {
+        fprintf(stderr, "SITL: socket bind failed on RC in port : %d - %s\n", _rcin_port, strerror(errno));
+        fprintf(stderr, "Aborting launch...\n");
+        exit(1);
+    }
+    if (!_sitl_rc_in.set_blocking(false)) {
+        fprintf(stderr, "SITL: socket set_blocking(false) failed on RC in port: %d - %s\n", _rcin_port, strerror(errno));
+        fprintf(stderr, "Aborting launch...\n");
+        exit(1);
+    }
+    if (!_sitl_rc_in.set_cloexec()) {
+        fprintf(stderr, "SITL: socket set_cloexec() failed on RC in port: %d - %s\n", _rcin_port, strerror(errno));
+        fprintf(stderr, "Aborting launch...\n");
+        exit(1);
+    }
 }
 #endif
 
@@ -146,7 +162,7 @@ void SITL_State::_fdm_input_step(void)
     }
 
     // simulate RC input at 50Hz
-    if (AP_HAL::millis() - last_pwm_input >= 20 && _sitl->rc_fail == 0) {
+    if (AP_HAL::millis() - last_pwm_input >= 20 && _sitl->rc_fail != SITL::SITL::SITL_RCFail_NoPulses) {
         last_pwm_input = AP_HAL::millis();
         new_rc_input = true;
     }
@@ -187,8 +203,25 @@ void SITL_State::_fdm_input_step(void)
 void SITL_State::wait_clock(uint64_t wait_time_usec)
 {
     while (AP_HAL::micros64() < wait_time_usec) {
-        _fdm_input_step();
+        if (hal.scheduler->in_main_thread()) {
+            _fdm_input_step();
+        } else {
+            usleep(1000);
+        }
     }
+}
+
+#define streq(a, b) (!strcmp(a, b))
+int SITL_State::sim_fd(const char *name, const char *arg)
+{
+    if (streq(name, "vicon")) {
+        if (vicon != nullptr) {
+            AP_HAL::panic("Only one vicon system at a time");
+        }
+        vicon = new SITL::Vicon();
+        return vicon->fd();
+    }
+    AP_HAL::panic("unknown simulated device: %s", name);
 }
 
 #ifndef HIL_MODE
@@ -197,30 +230,55 @@ void SITL_State::wait_clock(uint64_t wait_time_usec)
  */
 void SITL_State::_check_rc_input(void)
 {
-    ssize_t size;
+    uint32_t count = 0;
+    while (_read_rc_sitl_input()) {
+        count++;
+    }
+
+    if (count > 100) {
+        ::fprintf(stderr, "Read %u rc inputs\n", count);
+    }
+}
+
+bool SITL_State::_read_rc_sitl_input()
+{
     struct pwm_packet {
         uint16_t pwm[16];
     } pwm_pkt;
 
-    size = _sitl_rc_in.recv(&pwm_pkt, sizeof(pwm_pkt), 0);
+    const ssize_t size = _sitl_rc_in.recv(&pwm_pkt, sizeof(pwm_pkt), 0);
     switch (size) {
+    case -1:
+        return false;
     case 8*2:
     case 16*2: {
         // a packet giving the receiver PWM inputs
-        uint8_t i;
-        for (i=0; i<size/2; i++) {
+        for (uint8_t i=0; i<size/2; i++) {
             // setup the pwm input for the RC channel inputs
             if (i < _sitl->state.rcin_chan_count) {
                 // we're using rc from simulator
                 continue;
             }
-            if (pwm_pkt.pwm[i] != 0) {
-                pwm_input[i] = pwm_pkt.pwm[i];
+            uint16_t pwm = pwm_pkt.pwm[i];
+            if (pwm != 0) {
+                if (_sitl->rc_fail == SITL::SITL::SITL_RCFail_Throttle950) {
+                    if (i == 2) {
+                        // set throttle (assumed to be on channel 3...)
+                        pwm = 950;
+                    } else {
+                        // centre all other inputs
+                        pwm = 1500;
+                    }
+                }
+                pwm_input[i] = pwm;
             }
         }
-        break;
+        return true;
     }
+    default:
+        fprintf(stderr, "Malformed SITL RC input (%li)", size);
     }
+    return false;
 }
 
 /*
@@ -233,8 +291,8 @@ void SITL_State::_output_to_flightgear(void)
 
     fdm.version = 0x18;
     fdm.padding = 0;
-    fdm.longitude = radians(sfdm.longitude);
-    fdm.latitude = radians(sfdm.latitude);
+    fdm.longitude = DEG_TO_RAD_DOUBLE*sfdm.longitude;
+    fdm.latitude = DEG_TO_RAD_DOUBLE*sfdm.latitude;
     fdm.altitude = sfdm.altitude;
     fdm.agl = sfdm.altitude;
     fdm.phi   = radians(sfdm.rollDeg);
@@ -263,7 +321,7 @@ void SITL_State::_output_to_flightgear(void)
  */
 void SITL_State::_fdm_input_local(void)
 {
-    SITL::Aircraft::sitl_input input;
+    struct sitl_input input;
 
     // check for direct RC input
     _check_rc_input();
@@ -279,7 +337,7 @@ void SITL_State::_fdm_input_local(void)
         sitl_model->fill_fdm(_sitl->state);
         _sitl->update_rate_hz = sitl_model->get_rate_hz();
 
-        if (_sitl->rc_fail == 0) {
+        if (_sitl->rc_fail == SITL::SITL::SITL_RCFail_None) {
             for (uint8_t i=0; i< _sitl->state.rcin_chan_count; i++) {
                 pwm_input[i] = 1000 + _sitl->state.rcin[i]*1000;
             }
@@ -291,6 +349,13 @@ void SITL_State::_fdm_input_local(void)
     }
     if (adsb != nullptr) {
         adsb->update();
+    }
+    if (vicon != nullptr) {
+        Quaternion attitude;
+        sitl_model->get_attitude(attitude);
+        vicon->update(sitl_model->get_location(),
+                      sitl_model->get_position(),
+                      attitude);
     }
 
     if (_sitl && _use_fg_view) {
@@ -314,7 +379,7 @@ void SITL_State::_fdm_input_local(void)
 /*
   create sitl_input structure for sending to FDM
  */
-void SITL_State::_simulator_servos(SITL::Aircraft::sitl_input &input)
+void SITL_State::_simulator_servos(struct sitl_input &input)
 {
     static uint32_t last_update_usec;
 
@@ -339,23 +404,39 @@ void SITL_State::_simulator_servos(SITL::Aircraft::sitl_input &input)
     uint32_t now = AP_HAL::micros();
     last_update_usec = now;
 
-    // pass wind into simulators, using a wind gradient below 60m
     float altitude = _barometer?_barometer->get_altitude():0;
     float wind_speed = 0;
     float wind_direction = 0;
     float wind_dir_z = 0;
-    if (_sitl) {
+
+    // give 5 seconds to calibrate airspeed sensor at 0 wind speed
+    if (wind_start_delay_micros == 0) {
+        wind_start_delay_micros = now;
+    } else if (_sitl && (now - wind_start_delay_micros) > 5000000 ) {
         // The EKF does not like step inputs so this LPF keeps it happy.
         wind_speed =     _sitl->wind_speed_active     = (0.95f*_sitl->wind_speed_active)     + (0.05f*_sitl->wind_speed);
         wind_direction = _sitl->wind_direction_active = (0.95f*_sitl->wind_direction_active) + (0.05f*_sitl->wind_direction);
         wind_dir_z =     _sitl->wind_dir_z_active     = (0.95f*_sitl->wind_dir_z_active)     + (0.05f*_sitl->wind_dir_z);
-    }
+        
+        // pass wind into simulators using different wind types via param SIM_WIND_T*.
+        switch (_sitl->wind_type) {
+        case SITL::SITL::WIND_TYPE_SQRT:
+            if (altitude < _sitl->wind_type_alt) {
+                wind_speed *= sqrtf(MAX(altitude / _sitl->wind_type_alt, 0));
+            }
+            break;
 
-    if (altitude < 0) {
-        altitude = 0;
-    }
-    if (altitude < 60) {
-        wind_speed *= sqrtf(MAX(altitude / 60, 0));
+        case SITL::SITL::WIND_TYPE_COEF:
+            wind_speed += (altitude - _sitl->wind_type_alt) * _sitl->wind_type_coef;
+            break;
+
+        case SITL::SITL::WIND_TYPE_NO_LIMIT:
+        default:
+            break;
+        }
+
+        // never allow negative wind velocity
+        wind_speed = MAX(wind_speed, 0);
     }
 
     input.wind.speed = wind_speed;
@@ -390,7 +471,7 @@ void SITL_State::_simulator_servos(SITL::Aircraft::sitl_input &input)
     } else if (_vehicle == APMrover2) {
         input.servos[2] = static_cast<uint16_t>(constrain_int16(input.servos[2], 1000, 2000));
         input.servos[0] = static_cast<uint16_t>(constrain_int16(input.servos[0], 1000, 2000));
-        motors_on = ((input.servos[2] - 1500) / 500.0f) != 0;
+        motors_on = !is_zero(((input.servos[2] - 1500) / 500.0f));
     } else {
         motors_on = false;
         // run checks on each motor
@@ -427,7 +508,12 @@ void SITL_State::_simulator_servos(SITL::Aircraft::sitl_input &input)
                 }
             } else {
                 // simulate simple battery setup
-                float throttle = motors_on?(input.servos[2]-1000) / 1000.0f:0;
+                float throttle;
+                if (_vehicle == APMrover2) {
+                    throttle = motors_on ? (input.servos[2] - 1500) / 500.0f : 0;
+                } else {
+                    throttle = motors_on ? (input.servos[2] - 1000) / 1000.0f : 0;
+                }
                 // lose 0.7V at full throttle
                 voltage = _sitl->batt_voltage - 0.7f*fabsf(throttle);
 
@@ -444,6 +530,9 @@ void SITL_State::_simulator_servos(SITL::Aircraft::sitl_input &input)
     // assume 3DR power brick
     voltage_pin_value = ((voltage / 10.1f) / 5.0f) * 1024;
     current_pin_value = ((_current / 17.0f) / 5.0f) * 1024;
+    // fake battery2 as just a 25% gain on the first one
+    voltage2_pin_value = ((voltage * 0.25f / 10.1f) / 5.0f) * 1024;
+    current2_pin_value = ((_current * 0.25f / 17.0f) / 5.0f) * 1024;
 }
 
 void SITL_State::init(int argc, char * const argv[])
@@ -463,14 +552,20 @@ void SITL_State::set_height_agl(void)
 {
     static float home_alt = -1;
 
-    if (home_alt == -1 && _sitl->state.altitude > 0) {
+    if (!_sitl) {
+        // in example program
+        return;
+    }
+
+    if (is_equal(home_alt, -1.0f) && _sitl->state.altitude > 0) {
         // remember home altitude as first non-zero altitude
         home_alt = _sitl->state.altitude;
     }
 
 #if AP_TERRAIN_AVAILABLE
-    if (_terrain &&
-            _sitl->terrain_enable) {
+    if (_terrain != nullptr &&
+        _sitl != nullptr &&
+        _sitl->terrain_enable) {
         // get height above terrain from AP_Terrain. This assumes
         // AP_Terrain is working
         float terrain_height_amsl;
@@ -485,8 +580,10 @@ void SITL_State::set_height_agl(void)
     }
 #endif
 
-    // fall back to flat earth model
-    _sitl->height_agl = _sitl->state.altitude - home_alt;
+    if (_sitl != nullptr) {
+        // fall back to flat earth model
+        _sitl->height_agl = _sitl->state.altitude - home_alt;
+    }
 }
 
 #endif

@@ -8,10 +8,6 @@
 // stabilize_init - initialise stabilize controller
 bool Copter::ModeStabilize_Heli::init(bool ignore_checks)
 {
-    // set target altitude to zero for reporting
-    // To-Do: make pos controller aware when it's active/inactive so it can always report the altitude error?
-    pos_control->set_alt_target(0);
-
     // set stab collective true to use stabilize scaled collective pitch range
     copter.input_manager.set_use_stab_col(true);
 
@@ -32,18 +28,9 @@ void Copter::ModeStabilize_Heli::run()
     // that the servos move in a realistic fashion while disarmed for operational checks.
     // Also, unlike multicopters we do not set throttle (i.e. collective pitch) to zero so the swash servos move
     
-    if(!motors->armed()) {
-        copter.heli_flags.init_targets_on_arming = true;
-        attitude_control->set_yaw_target_to_current_heading();
+    if (motors->init_targets_on_arming()) {
         attitude_control->reset_rate_controller_I_terms();
-    }
-    
-    if(motors->armed() && copter.heli_flags.init_targets_on_arming) {
         attitude_control->set_yaw_target_to_current_heading();
-        attitude_control->reset_rate_controller_I_terms();
-        if (motors->get_interlock()) {
-            copter.heli_flags.init_targets_on_arming=false;
-        }
     }
 
     // clear landing flag above zero throttle
@@ -51,12 +38,13 @@ void Copter::ModeStabilize_Heli::run()
         set_land_complete(false);
     }
 
+    motors->set_desired_spool_state(AP_Motors::DESIRED_THROTTLE_UNLIMITED);
+
     // apply SIMPLE mode transform to pilot inputs
     update_simple_mode();
 
     // convert pilot input to lean angles
-    // To-Do: convert get_pilot_desired_lean_angles to return angles as floats
-    get_pilot_desired_lean_angles(channel_roll->get_control_in(), channel_pitch->get_control_in(), target_roll, target_pitch, copter.aparm.angle_max);
+    get_pilot_desired_lean_angles(target_roll, target_pitch, copter.aparm.angle_max, copter.aparm.angle_max);
 
     // get pilot's desired yaw rate
     target_yaw_rate = get_pilot_desired_yaw_rate(channel_yaw->get_control_in());
@@ -65,7 +53,7 @@ void Copter::ModeStabilize_Heli::run()
     pilot_throttle_scaled = copter.input_manager.get_pilot_desired_collective(channel_throttle->get_control_in());
 
     // call attitude controller
-    attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(target_roll, target_pitch, target_yaw_rate, get_smoothing_gain());
+    attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(target_roll, target_pitch, target_yaw_rate);
 
     // output pilot's throttle - note that TradHeli does not used angle-boost
     attitude_control->set_throttle_out(pilot_throttle_scaled, false, g.throttle_filt);

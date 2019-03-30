@@ -1,6 +1,5 @@
 #include <AP_HAL/AP_HAL.h>
 
-#if HAL_CPU_CLASS >= HAL_CPU_CLASS_150
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
 #include <AP_AHRS/AP_AHRS.h>
@@ -137,7 +136,7 @@ void NavEKF3_core::writeWheelOdom(float delAng, float delTime, uint32_t timeStam
 {
     // This is a simple hack to get wheel encoder data into the EKF and verify the interface sign conventions and units
     // It uses the exisiting body frame velocity fusion.
-    // TODO implement a dedicated wheel odometry observaton model
+    // TODO implement a dedicated wheel odometry observation model
 
     // limit update rate to maximum allowed by sensor buffers and fusion process
     // don't try to write to buffer until the filter has been initialised
@@ -151,7 +150,7 @@ void NavEKF3_core::writeWheelOdom(float delAng, float delTime, uint32_t timeStam
     wheelOdmDataNew.delTime = delTime;
     wheelOdmMeasTime_ms = timeStamp_ms;
 
-    // becasue we are currently converting to an equivalent velocity measurement before fusing
+    // because we are currently converting to an equivalent velocity measurement before fusing
     // the measurement time is moved back to the middle of the sampling period
     wheelOdmDataNew.time_ms = timeStamp_ms - (uint32_t)(500.0f * delTime);
 
@@ -161,7 +160,7 @@ void NavEKF3_core::writeWheelOdom(float delAng, float delTime, uint32_t timeStam
 
 // write the raw optical flow measurements
 // this needs to be called externally.
-void NavEKF3_core::writeOptFlowMeas(uint8_t &rawFlowQuality, Vector2f &rawFlowRates, Vector2f &rawGyroRates, uint32_t &msecFlowMeas, const Vector3f &posOffset)
+void NavEKF3_core::writeOptFlowMeas(const uint8_t rawFlowQuality, const Vector2f &rawFlowRates, const Vector2f &rawGyroRates, const uint32_t msecFlowMeas, const Vector3f &posOffset)
 {
     // limit update rate to maximum allowed by sensor buffers
     if ((imuSampleTime_ms - flowMeaTime_ms) < frontend->sensorIntervalMin_ms) {
@@ -247,6 +246,18 @@ void NavEKF3_core::readMagData()
         return;
     }
 
+    if (_ahrs->get_compass()->learn_offsets_enabled()) {
+        // while learning offsets keep all mag states reset
+        InitialiseVariablesMag();
+        wasLearningCompass_ms = imuSampleTime_ms;
+    } else if (wasLearningCompass_ms != 0 && imuSampleTime_ms - wasLearningCompass_ms > 1000) {
+        wasLearningCompass_ms = 0;
+        // force a new yaw alignment 1s after learning completes. The
+        // delay is to ensure any buffered mag samples are discarded
+        yawAlignComplete = false;
+        InitialiseVariablesMag();
+    }
+    
     // limit compass update rate to prevent high processor loading because magnetometer fusion is an expensive step and we could overflow the FIFO buffer
     if (use_compass() && ((_ahrs->get_compass()->last_update_usec() - lastMagUpdate_us) > 1000 * frontend->sensorIntervalMin_ms)) {
         frontend->logging.log_compass = true;
@@ -280,6 +291,7 @@ void NavEKF3_core::readMagData()
                     magStateResetRequest = true;
                     // declare the field unlearned so that the reset request will be obeyed
                     magFieldLearned = false;
+                    break;
                 }
             }
         }
@@ -329,7 +341,7 @@ void NavEKF3_core::readMagData()
  */
 void NavEKF3_core::readIMUData()
 {
-    const AP_InertialSensor &ins = _ahrs->get_ins();
+    const AP_InertialSensor &ins = AP::ins();
 
     // calculate an averaged IMU update rate using a spike and lowpass filter combination
     dtIMUavg = 0.02f * constrain_float(ins.get_loop_delta_t(),0.5f * dtIMUavg, 2.0f * dtIMUavg) + 0.98f * dtIMUavg;
@@ -437,7 +449,7 @@ void NavEKF3_core::readIMUData()
 // read the delta velocity and corresponding time interval from the IMU
 // return false if data is not available
 bool NavEKF3_core::readDeltaVelocity(uint8_t ins_index, Vector3f &dVel, float &dVel_dt) {
-    const AP_InertialSensor &ins = _ahrs->get_ins();
+    const AP_InertialSensor &ins = AP::ins();
 
     if (ins_index < ins.get_accel_count()) {
         ins.get_delta_velocity(ins_index,dVel);
@@ -546,7 +558,7 @@ void NavEKF3_core::readGpsData()
             // Read the GPS location in WGS-84 lat,long,height coordinates
             const struct Location &gpsloc = gps.location();
 
-            // Set the EKF origin and magnetic field declination if not previously set  and GPS checks have passed
+            // Set the EKF origin and magnetic field declination if not previously set and GPS checks have passed
             if (gpsGoodToAlign && !validOrigin) {
                 setOrigin();
 
@@ -583,7 +595,7 @@ void NavEKF3_core::readGpsData()
 // read the delta angle and corresponding time interval from the IMU
 // return false if data is not available
 bool NavEKF3_core::readDeltaAngle(uint8_t ins_index, Vector3f &dAng) {
-    const AP_InertialSensor &ins = _ahrs->get_ins();
+    const AP_InertialSensor &ins = AP::ins();
 
     if (ins_index < ins.get_gyro_count()) {
         ins.get_delta_angle(ins_index,dAng);
@@ -603,10 +615,11 @@ void NavEKF3_core::readBaroData()
 {
     // check to see if baro measurement has changed so we know if a new measurement has arrived
     // limit update rate to avoid overflowing the FIFO buffer
-    if (frontend->_baro.get_last_update() - lastBaroReceived_ms > frontend->sensorIntervalMin_ms) {
+    const AP_Baro &baro = AP::baro();
+    if (baro.get_last_update() - lastBaroReceived_ms > frontend->sensorIntervalMin_ms) {
         frontend->logging.log_baro = true;
 
-        baroDataNew.hgt = frontend->_baro.get_altitude();
+        baroDataNew.hgt = baro.get_altitude();
 
         // If we are in takeoff mode, the height measurement is limited to be no less than the measurement at start of takeoff
         // This prevents negative baro disturbances due to copter downwash corrupting the EKF altitude during initial ascent
@@ -615,7 +628,7 @@ void NavEKF3_core::readBaroData()
         }
 
         // time stamp used to check for new measurement
-        lastBaroReceived_ms = frontend->_baro.get_last_update();
+        lastBaroReceived_ms = baro.get_last_update();
 
         // estimate of time height measurement was taken, allowing for delays
         baroDataNew.time_ms = lastBaroReceived_ms - frontend->_hgtDelay_ms;
@@ -663,7 +676,7 @@ void NavEKF3_core::correctEkfOriginHeight()
 
     // calculate the observation variance assuming EKF error relative to datum is independent of GPS observation error
     // when not using GPS as height source
-    float originHgtObsVar = sq(gpsHgtAccuracy) + P[8][8];
+    float originHgtObsVar = sq(gpsHgtAccuracy) + P[9][9];
 
     // calculate the correction gain
     float gain = ekfOriginHgtVar / (ekfOriginHgtVar + originHgtObsVar);
@@ -779,9 +792,9 @@ void NavEKF3_core::readRngBcnData()
     // Check if the range beacon data can be used to align the vehicle position
     if (imuSampleTime_ms - rngBcnLast3DmeasTime_ms < 250 && beaconVehiclePosErr < 1.0f && rngBcnAlignmentCompleted) {
         // check for consistency between the position reported by the beacon and the position from the 3-State alignment filter
-        float posDiffSq = sq(receiverPos.x - beaconVehiclePosNED.x) + sq(receiverPos.y - beaconVehiclePosNED.y);
-        float posDiffVar = sq(beaconVehiclePosErr) + receiverPosCov[0][0] + receiverPosCov[1][1];
-        if (posDiffSq < 9.0f*posDiffVar) {
+        const float posDiffSq = sq(receiverPos.x - beaconVehiclePosNED.x) + sq(receiverPos.y - beaconVehiclePosNED.y);
+        const float posDiffVar = sq(beaconVehiclePosErr) + receiverPosCov[0][0] + receiverPosCov[1][1];
+        if (posDiffSq < 9.0f * posDiffVar) {
             rngBcnGoodToAlign = true;
             // Set the EKF origin and magnetic field declination if not previously set
             if (!validOrigin && PV_AidingMode != AID_ABSOLUTE) {
@@ -811,7 +824,7 @@ void NavEKF3_core::readRngBcnData()
     }
 
     // Check the buffer for measurements that have been overtaken by the fusion time horizon and need to be fused
-    rngBcnDataToFuse = storedRangeBeacon.recall(rngBcnDataDelayed,imuDataDelayed.time_ms);
+    rngBcnDataToFuse = storedRangeBeacon.recall(rngBcnDataDelayed, imuDataDelayed.time_ms);
 
     // Correct the range beacon earth frame origin for estimated offset relative to the EKF earth frame origin
     if (rngBcnDataToFuse) {
@@ -855,4 +868,3 @@ void NavEKF3_core::getTimingStatistics(struct ekf_timing &_timing)
     memset(&timing, 0, sizeof(timing));
 }
 
-#endif // HAL_CPU_CLASS

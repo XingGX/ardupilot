@@ -28,15 +28,8 @@
 
 #include "AP_InertialSensor.h"
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_F4LIGHT
-#include <AP_HAL_F4Light/AP_HAL_F4Light.h>
-#include <AP_HAL_F4Light/GPIO.h>
-#include <AP_HAL_F4Light/Scheduler.h>
-using namespace F4Light;
-#endif
-
 class AuxiliaryBus;
-class DataFlash_Class;
+class AP_Logger;
 
 class AP_InertialSensor_Backend
 {
@@ -77,6 +70,9 @@ public:
      */
     int16_t get_id() const { return _id; }
 
+    //Returns the Clip Limit
+    float get_clip_limit() const { return _clip_limit; }
+
     // notify of a fifo reset
     void notify_fifo_reset(void);
     
@@ -102,15 +98,27 @@ public:
         DEVTYPE_GYR_MPU9250  = 0x24,
         DEVTYPE_GYR_I3G4250D = 0x25,
         DEVTYPE_GYR_LSM9DS1  = 0x26,
-        DEVTYPE_INS_ICM20789 = 0x27
+        DEVTYPE_INS_ICM20789 = 0x27,
+        DEVTYPE_INS_ICM20689 = 0x28,
+        DEVTYPE_INS_BMI055   = 0x29,
+        DEVTYPE_SITL         = 0x2A,
+        DEVTYPE_INS_BMI088   = 0x2B,
+        DEVTYPE_INS_ICM20948 = 0x2C,
+        DEVTYPE_INS_ICM20648 = 0x2D,
+        DEVTYPE_INS_ICM20649 = 0x2E,
+        DEVTYPE_INS_ICM20602 = 0x2F,
+        DEVTYPE_INS_ICM20601 = 0x30,
     };
-        
+
 protected:
     // access to frontend
     AP_InertialSensor &_imu;
 
     // semaphore for access to shared frontend data
-    AP_HAL::Semaphore *_sem;
+    HAL_Semaphore_Recursive _sem;
+
+    //Default Clip Limit
+    float _clip_limit = 15.5f * GRAVITY_MSS;
 
     void _rotate_and_correct_accel(uint8_t instance, Vector3f &accel);
     void _rotate_and_correct_gyro(uint8_t instance, Vector3f &gyro);
@@ -142,9 +150,35 @@ protected:
 
     // set the amount of oversamping a gyro is doing
     void _set_gyro_oversampling(uint8_t instance, uint8_t n);
-    
+
+    // indicate the backend is doing sensor-rate sampling for this accel
+    void _set_accel_sensor_rate_sampling_enabled(uint8_t instance, bool value) {
+        const uint8_t bit = (1<<instance);
+        if (value) {
+            _imu._accel_sensor_rate_sampling_enabled |= bit;
+        } else {
+            _imu._accel_sensor_rate_sampling_enabled &= ~bit;
+        }
+    }
+
+    void _set_gyro_sensor_rate_sampling_enabled(uint8_t instance, bool value) {
+        const uint8_t bit = (1<<instance);
+        if (value) {
+            _imu._gyro_sensor_rate_sampling_enabled |= bit;
+        } else {
+            _imu._gyro_sensor_rate_sampling_enabled &= ~bit;
+        }
+    }
+
+    void _set_raw_sample_accel_multiplier(uint8_t instance, uint16_t mul) {
+        _imu._accel_raw_sampling_multiplier[instance] = mul;
+    }
+    void _set_raw_sampl_gyro_multiplier(uint8_t instance, uint16_t mul) {
+        _imu._gyro_raw_sampling_multiplier[instance] = mul;
+    }
+
     // update the sensor rate for FIFO sensors
-    void _update_sensor_rate(uint16_t &count, uint32_t &start_us, float &rate_hz);
+    void _update_sensor_rate(uint16_t &count, uint32_t &start_us, float &rate_hz) const;
     
     // set accelerometer max absolute offset for calibration
     void _set_accel_max_abs_offset(uint8_t instance, float offset);
@@ -224,6 +258,11 @@ protected:
     bool enable_fast_sampling(uint8_t instance) {
         return (_imu._fast_sampling_mask & (1U<<instance)) != 0;
     }
+
+    // called by subclass when data is received from the sensor, thus
+    // at the 'sensor rate'
+    void _notify_new_accel_sensor_rate_sample(uint8_t instance, const Vector3f &accel);
+    void _notify_new_gyro_sensor_rate_sample(uint8_t instance, const Vector3f &gyro);
 
     /*
       notify of a FIFO reset so we don't use bad data to update observed sensor rate

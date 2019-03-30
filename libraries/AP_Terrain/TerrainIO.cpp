@@ -173,9 +173,9 @@ void AP_Terrain::open_file(void)
     }
     snprintf(p, 13, "/%c%02u%c%03u.DAT",
              block.lat_degrees<0?'S':'N',
-             MIN(abs((int32_t)block.lat_degrees), 99),
+             (unsigned)MIN(abs((int32_t)block.lat_degrees), 99),
              block.lon_degrees<0?'W':'E',
-             MIN(abs((int32_t)block.lon_degrees), 999));
+             (unsigned)MIN(abs((int32_t)block.lon_degrees), 999));
 
     // create directory if need be
     if (!directory_created) {
@@ -230,7 +230,7 @@ void AP_Terrain::seek_offset(void)
     loc2.lng = (block.lon_degrees+1)*10*1000*1000L;
 
     // shift another two blocks east to ensure room is available
-    location_offset(loc2, 0, 2*grid_spacing*TERRAIN_GRID_BLOCK_SIZE_Y);
+    loc2.offset(0, 2*grid_spacing*TERRAIN_GRID_BLOCK_SIZE_Y);
     Vector2f offset = location_diff(loc1, loc2);
     uint16_t east_blocks = offset.y / (grid_spacing*TERRAIN_GRID_BLOCK_SIZE_Y);
 

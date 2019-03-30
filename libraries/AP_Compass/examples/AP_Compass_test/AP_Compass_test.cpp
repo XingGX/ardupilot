@@ -20,9 +20,7 @@ static void setup()
 
     board_config.init();
 
-    if (!compass.init()) {
-        AP_HAL::panic("compass initialisation failed!");
-    }
+    compass.init();
     hal.console->printf("init done - %u compasses detected\n", compass.get_count());
 
     // set offsets to account for surrounding interference
@@ -40,8 +38,6 @@ static void loop()
     static float min[COMPASS_MAX_INSTANCES][3];
     static float max[COMPASS_MAX_INSTANCES][3];
     static float offset[COMPASS_MAX_INSTANCES][3];
-
-    compass.accumulate();
 
     if ((AP_HAL::micros() - timer) > 100000L) {
         timer = AP_HAL::micros();

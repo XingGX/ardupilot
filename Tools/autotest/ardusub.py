@@ -3,186 +3,196 @@
 # Dive ArduSub in SITL
 from __future__ import print_function
 import os
-import shutil
 
 import pexpect
 from pymavlink import mavutil
 
-from common import *
 from pysim import util
 
-# get location of scripts
-testdir = os.path.dirname(os.path.realpath(__file__))
+from common import AutoTest
+from common import NotAchievedException
 
+SITL_START_LOCATION = mavutil.location(33.810313, -118.393867, 0, 185)
 
-HOME = mavutil.location(33.810313, -118.393867, 0, 185)
-homeloc = None
+class Joystick():
+    Pitch = 1
+    Roll = 2
+    Throttle = 3
+    Yaw = 4
+    Forward = 5
+    Lateral = 6
 
+class AutoTestSub(AutoTest):
 
-def dive_manual(mavproxy, mav):
-    set_rc(mavproxy, mav, 3, 1600)
-    set_rc(mavproxy, mav, 5, 1600)
-    set_rc(mavproxy, mav, 6, 1550)
+    def log_name(self):
+        return "ArduSub"
 
-    if not wait_distance(mav, 50, accuracy=7, timeout=200):
-        return False
-    
-    set_rc(mavproxy, mav, 4, 1550)
-    
-    if not wait_heading(mav, 0):
-        return False
-    
-    set_rc(mavproxy, mav, 4, 1500)
-    
-    if not wait_distance(mav, 50, accuracy=7, timeout=100):
-        return False
-    
-    set_rc(mavproxy, mav, 4, 1550)
-    
-    if not wait_heading(mav, 0):
-        return False
-    
-    set_rc(mavproxy, mav, 4, 1500)
-    set_rc(mavproxy, mav, 5, 1500)
-    set_rc(mavproxy, mav, 6, 1100)
-    
-    if not wait_distance(mav, 75, accuracy=7, timeout=100):
-        return False
+    def test_filepath(self):
+         return os.path.realpath(__file__)
 
-    set_rc_default(mavproxy)
+    def default_mode(self):
+        return 'MANUAL'
 
-    disarm_vehicle(mavproxy, mav)
-    progress("Manual dive OK")
-    return True
+    def sitl_start_location(self):
+        return SITL_START_LOCATION
 
+    def default_frame(self):
+        return 'vectored'
 
-def dive_mission(mavproxy, mav, filename):
-    
-    progress("Executing mission %s" % filename)
-    mavproxy.send('wp load %s\n' % filename)
-    mavproxy.expect('Flight plan received')
-    mavproxy.send('wp list\n')
-    mavproxy.expect('Saved [0-9]+ waypoints')
-    set_rc_default(mavproxy)
-    
-    if not arm_vehicle(mavproxy, mav):
-        progress("Failed to ARM")
-        return False
-    
-    mavproxy.send('mode auto\n')
-    wait_mode(mav, 'AUTO')
-    
-    if not wait_waypoint(mav, 1, 5, max_dist=5):
-        return False
+    def init(self):
+        super(AutoTestSub, self).init()
 
-    disarm_vehicle(mavproxy, mav)
+        # FIXME:
+        self.set_parameter("FS_GCS_ENABLE", 0)
 
-    progress("Mission OK")
-    return True
+    def is_sub(self):
+        return True
 
+    def dive_manual(self):
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
 
-def dive_ArduSub(binary, viewerip=None, use_map=False, valgrind=False, gdb=False, gdbserver=False, speedup=10):
-    """Dive ArduSub in SITL.
+        self.set_rc(Joystick.Throttle, 1600)
+        self.set_rc(Joystick.Forward, 1600)
+        self.set_rc(Joystick.Lateral, 1550)
 
-    you can pass viewerip as an IP address to optionally send fg and
-    mavproxy packets too for local viewing of the mission in real time
-    """
-    options = '--sitl=127.0.0.1:5501 --out=127.0.0.1:19550 --streamrate=10'
-    if viewerip:
-        options += " --out=%s:14550" % viewerip
-    if use_map:
-        options += ' --map'
+        self.wait_distance(50, accuracy=7, timeout=200)
+        self.set_rc(Joystick.Yaw, 1550)
 
-    home = "%f,%f,%u,%u" % (HOME.lat, HOME.lng, HOME.alt, HOME.heading)
-    sitl = util.start_SITL(binary, model='vectored', wipe=True, home=home, speedup=speedup)
-    mavproxy = util.start_MAVProxy_SITL('ArduSub')
-    mavproxy.expect('Received [0-9]+ parameters')
+        self.wait_heading(0)
+        self.set_rc(Joystick.Yaw, 1500)
 
-    # setup test parameters
-    mavproxy.send("param load %s/default_params/sub.parm\n" % testdir)
-    mavproxy.expect('Loaded [0-9]+ parameters')
-    mavproxy.send('param set FS_GCS_ENABLE 0\n')
-    mavproxy.send("param set LOG_REPLAY 1\n")
-    mavproxy.send("param set LOG_DISARMED 1\n")
-    time.sleep(3)
+        self.wait_distance(50, accuracy=7, timeout=100)
+        self.set_rc(Joystick.Yaw, 1550)
 
-    # reboot with new parameters
-    util.pexpect_close(mavproxy)
-    util.pexpect_close(sitl)
+        self.wait_heading(0)
+        self.set_rc(Joystick.Yaw, 1500)
+        self.set_rc(Joystick.Forward, 1500)
+        self.set_rc(Joystick.Lateral, 1100)
 
-    sitl = util.start_SITL(binary, model='vectored', home=home, speedup=speedup, valgrind=valgrind, gdb=gdb, gdbserver=gdbserver)
-    mavproxy = util.start_MAVProxy_SITL('ArduSub', options=options)
-    mavproxy.expect('Telemetry log: (\S+)\r\n')
-    logfile = mavproxy.match.group(1)
-    progress("LOGFILE %s" % logfile)
+        self.wait_distance(75, accuracy=7, timeout=100)
+        self.set_rc_default()
 
-    buildlog = util.reltopdir("../buildlogs/ArduSub-test.tlog")
-    progress("buildlog=%s" % buildlog)
-    if os.path.exists(buildlog):
-        os.unlink(buildlog)
-    try:
-        os.link(logfile, buildlog)
-    except Exception:
-        pass
+        self.disarm_vehicle()
+        self.progress("Manual dive OK")
 
-    mavproxy.expect('Received [0-9]+ parameters')
+    def dive_mission(self, filename):
+        self.progress("Executing mission %s" % filename)
+        self.load_mission(filename)
+        self.set_rc_default()
 
-    util.expect_setup_callback(mavproxy, expect_callback)
+        self.arm_vehicle()
 
-    expect_list_clear()
-    expect_list_extend([sitl, mavproxy])
+        self.mavproxy.send('mode auto\n')
+        self.wait_mode('AUTO')
 
-    progress("Started simulator")
+        self.wait_waypoint(1, 5, max_dist=5)
 
-    # get a mavlink connection going
-    try:
-        mav = mavutil.mavlink_connection('127.0.0.1:19550', robust_parsing=True)
-    except Exception as msg:
-        progress("Failed to start mavlink connection on 127.0.0.1:19550" % msg)
-        raise
-    mav.message_hooks.append(message_hook)
-    mav.idle_hooks.append(idle_hook)
+        self.disarm_vehicle()
 
-    failed = False
-    e = 'None'
-    try:
-        progress("Waiting for a heartbeat with mavlink protocol %s" % mav.WIRE_PROTOCOL_VERSION)
-        mav.wait_heartbeat()
-        progress("Waiting for GPS fix")
-        mav.wait_gps_fix()
-        
-        # wait for EKF and GPS checks to pass
-        mavproxy.expect('IMU0 is using GPS')
-        
-        homeloc = mav.location()
-        progress("Home location: %s" % homeloc)
-        set_rc_default(mavproxy)
-        if not arm_vehicle(mavproxy, mav):
-            progress("Failed to ARM")
-            failed = True
-        if not dive_manual(mavproxy, mav):
-            progress("Failed manual dive")
-            failed = True
-        if not dive_mission(mavproxy, mav, os.path.join(testdir, "sub_mission.txt")):
-            progress("Failed auto mission")
-            failed = True
-        if not log_download(mavproxy, mav, util.reltopdir("../buildlogs/ArduSub-log.bin")):
-            progress("Failed log download")
-            failed = True
-    except pexpect.TIMEOUT as e:
-        progress("Failed with timeout")
-        failed = True
+        self.progress("Mission OK")
 
-    mav.close()
-    util.pexpect_close(mavproxy)
-    util.pexpect_close(sitl)
+    def test_gripper_mission(self):
+        self.context_push()
+        ex = None
+        try:
+            try:
+                self.get_parameter("GRIP_ENABLE", timeout=5)
+            except NotAchievedException as e:
+                self.progress("Skipping; Gripper not enabled in config?")
+                return
 
-    valgrind_log = util.valgrind_log_filepath(binary=binary, model='sub')
-    if os.path.exists(valgrind_log):
-        os.chmod(valgrind_log, 0o644)
-        shutil.copy(valgrind_log, util.reltopdir("../buildlogs/APMrover2-valgrind.log"))
+            self.load_mission("sub-gripper-mission.txt")
+            self.mavproxy.send('mode loiter\n')
+            self.wait_ready_to_arm()
+            self.arm_vehicle()
+            self.mavproxy.send('mode auto\n')
+            self.wait_mode('AUTO')
+            self.mavproxy.expect("Gripper Grabbed")
+            self.mavproxy.expect("Gripper Released")
+        except Exception as e:
+            self.progress("Exception caught")
+            ex = e
+        self.context_pop()
+        if ex is not None:
+            raise ex
 
-    if failed:
-        progress("FAILED: %s" % e)
-        return False
-    return True
+    def dive_set_position_target(self):
+        self.change_mode('GUIDED')
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+
+        startpos = self.mav.recv_match(type='GLOBAL_POSITION_INT',
+                                       blocking=True)
+
+        lat = 5
+        lon = 5
+        alt = 10
+
+        tstart = self.get_sim_time()
+        while True:
+            if self.get_sim_time_cached() - tstart > 200:
+                raise NotAchievedException("Did not move far enough")
+            # send a position-control command
+            self.mav.mav.set_position_target_global_int_send(
+                0, # timestamp
+                1, # target system_id
+                1, # target component id
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                0b1111111111111000, # mask specifying use-only-lat-lon-alt
+                lat, # lat
+                lon, # lon
+                alt, # alt
+                0, # vx
+                0, # vy
+                0, # vz
+                0, # afx
+                0, # afy
+                0, # afz
+                0, # yaw
+                0, # yawrate
+            )
+            pos = self.mav.recv_match(type='GLOBAL_POSITION_INT',
+                                      blocking=True)
+            delta = self.get_distance_int(startpos, pos)
+            self.progress("delta=%f (want >10)" % delta)
+            if delta > 10:
+                break
+        self.change_mode('MANUAL')
+        self.disarm_vehicle()
+
+    def reboot_sitl(self):
+        """Reboot SITL instance and wait it to reconnect."""
+        self.mavproxy.send("reboot\n")
+        self.mavproxy.expect("Init ArduSub")
+        # empty mav to avoid getting old timestamps:
+        while self.mav.recv_match(blocking=False):
+            pass
+        self.initialise_after_reboot_sitl()
+
+    def tests(self):
+        '''return list of all tests'''
+        ret = super(AutoTestSub, self).tests()
+
+        ret.extend([
+            ("DiveManual", "Dive manual", self.dive_manual),
+
+            ("DiveMission",
+             "Dive mission",
+             lambda: self.dive_mission("sub_mission.txt")),
+
+            ("GripperMission",
+             "Test gripper mission items",
+             self.test_gripper_mission),
+
+            ("SET_POSITION_TARGET_GLOBAL_INT",
+             "Move vehicle using SET_POSITION_TARGET_GLOBAL_INT",
+             self.dive_set_position_target),
+
+            ("DownLoadLogs", "Download logs", lambda:
+             self.log_download(
+                 self.buildlogs_path("ArduSub-log.bin"),
+                 upload_logs=len(self.fail_list) > 0)),
+        ])
+
+        return ret

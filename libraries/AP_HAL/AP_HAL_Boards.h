@@ -8,12 +8,11 @@
 
 #define HAL_BOARD_SITL     3
 #define HAL_BOARD_SMACCM   4  // unused
-#define HAL_BOARD_PX4      5
+#define HAL_BOARD_PX4      5  // unused
 #define HAL_BOARD_LINUX    7
 #define HAL_BOARD_VRBRAIN  8
-#define HAL_BOARD_QURT     9
 #define HAL_BOARD_CHIBIOS  10
-#define HAL_BOARD_F4LIGHT  11
+#define HAL_BOARD_F4LIGHT  11 // reserved
 #define HAL_BOARD_EMPTY    99
 
 /* Default board subtype is -1 */
@@ -27,10 +26,8 @@
 #define HAL_BOARD_SUBTYPE_LINUX_ZYNQ       1004
 #define HAL_BOARD_SUBTYPE_LINUX_BBBMINI    1005
 #define HAL_BOARD_SUBTYPE_LINUX_BEBOP      1006
-#define HAL_BOARD_SUBTYPE_LINUX_MINLURE    1008
 #define HAL_BOARD_SUBTYPE_LINUX_ERLEBRAIN2 1009
 #define HAL_BOARD_SUBTYPE_LINUX_BH         1010
-#define HAL_BOARD_SUBTYPE_LINUX_QFLIGHT    1011
 #define HAL_BOARD_SUBTYPE_LINUX_PXFMINI    1012
 #define HAL_BOARD_SUBTYPE_LINUX_NAVIO2     1013
 #define HAL_BOARD_SUBTYPE_LINUX_DISCO      1014
@@ -42,25 +39,6 @@
 #define HAL_BOARD_SUBTYPE_LINUX_RST_ZYNQ   1021
 #define HAL_BOARD_SUBTYPE_LINUX_POCKET     1022
 
-/* HAL PX4 sub-types, starting at 2000 */
-#define HAL_BOARD_SUBTYPE_PX4_V1           2000
-#define HAL_BOARD_SUBTYPE_PX4_V2           2001
-#define HAL_BOARD_SUBTYPE_PX4_V4           2002
-#define HAL_BOARD_SUBTYPE_PX4_V3           2003
-#define HAL_BOARD_SUBTYPE_PX4_AEROFC_V1    2004
-#define HAL_BOARD_SUBTYPE_PX4_V4PRO        2005
-
-/* HAL VRBRAIN sub-types, starting at 4000 */
-#define HAL_BOARD_SUBTYPE_VRBRAIN_V45      4000
-#define HAL_BOARD_SUBTYPE_VRBRAIN_V51      4001
-#define HAL_BOARD_SUBTYPE_VRBRAIN_V52      4002
-#define HAL_BOARD_SUBTYPE_VRUBRAIN_V51     4003
-#define HAL_BOARD_SUBTYPE_VRUBRAIN_V52     4004
-#define HAL_BOARD_SUBTYPE_VRCORE_V10       4005
-#define HAL_BOARD_SUBTYPE_VRBRAIN_V54      4006
-#define HAL_BOARD_SUBTYPE_VRBRAIN_V52E     4007
-
-
 /* HAL CHIBIOS sub-types, starting at 5000 */
 #define HAL_BOARD_SUBTYPE_CHIBIOS_SKYVIPER_F412	5000
 #define HAL_BOARD_SUBTYPE_CHIBIOS_FMUV3         5001
@@ -69,6 +47,20 @@
 #define HAL_BOARD_SUBTYPE_CHIBIOS_SPARKY2       5004
 #define HAL_BOARD_SUBTYPE_CHIBIOS_REVOMINI      5005
 #define HAL_BOARD_SUBTYPE_CHIBIOS_MINIPIX       5006
+#define HAL_BOARD_SUBTYPE_CHIBIOS_CRAZYFLIE2    5007
+#define HAL_BOARD_SUBTYPE_CHIBIOS_OMNIBUSF7V2   5008
+#define HAL_BOARD_SUBTYPE_CHIBIOS_GENERIC       5009
+#define HAL_BOARD_SUBTYPE_CHIBIOS_F4BY          5010
+#define HAL_BOARD_SUBTYPE_CHIBIOS_OMNIBUSF4PRO  5011
+#define HAL_BOARD_SUBTYPE_CHIBIOS_AIRBOTF4      5012
+#define HAL_BOARD_SUBTYPE_CHIBIOS_FMUV5         5013
+#define HAL_BOARD_SUBTYPE_CHIBIOS_MATEKF405WING 5014
+#define HAL_BOARD_SUBTYPE_CHIBIOS_FMUV4PRO      5015
+#define HAL_BOARD_SUBTYPE_CHIBIOS_VRBRAIN_V51   5016
+#define HAL_BOARD_SUBTYPE_CHIBIOS_VRBRAIN_V52   5017
+#define HAL_BOARD_SUBTYPE_CHIBIOS_VRUBRAIN_V51  5018
+#define HAL_BOARD_SUBTYPE_CHIBIOS_VRCORE_V10    5019
+#define HAL_BOARD_SUBTYPE_CHIBIOS_VRBRAIN_V54   5020
 
 /* InertialSensor driver types */
 #define HAL_INS_NONE         0
@@ -83,8 +75,6 @@
 #define HAL_INS_LSM9DS0     11
 #define HAL_INS_MPU9250_I2C 13
 #define HAL_INS_BH          14
-#define HAL_INS_QFLIGHT     15
-#define HAL_INS_QURT        16
 #define HAL_INS_BBBMINI     17
 #define HAL_INS_AERO        18
 #define HAL_INS_MPU6500     19
@@ -92,6 +82,9 @@
 #define HAL_INS_RST         21
 #define HAL_INS_LSM9DS1     22
 #define HAL_INS_ICM20789_SPI 23
+#define HAL_INS_INV2_I2C    24
+#define HAL_INS_INV2_SPI    25
+
 
 /* Barometer driver types */
 #define HAL_BARO_NONE        0
@@ -103,13 +96,15 @@
 #define HAL_BARO_HIL         6
 #define HAL_BARO_VRBRAIN     7
 #define HAL_BARO_MS5637_I2C  8
-#define HAL_BARO_QFLIGHT     9
-#define HAL_BARO_QURT       10
 #define HAL_BARO_BMP280_I2C 11
 #define HAL_BARO_BMP280_SPI 12
 #define HAL_BARO_LPS25H     13
 #define HAL_BARO_20789_I2C_I2C  14
 #define HAL_BARO_20789_I2C_SPI  15
+#define HAL_BARO_LPS22H_SPI	16
+#define HAL_BARO_LPS25H_IMU_I2C 17
+#define HAL_BARO_FBM320_I2C 18
+#define HAL_BARO_DPS280_I2C 19
 
 /* Compass driver types */
 #define HAL_COMPASS_NONE                0
@@ -122,8 +117,6 @@
 #define HAL_COMPASS_HMC5843_MPU6000     7
 #define HAL_COMPASS_AK8963_MPU9250_I2C  9
 #define HAL_COMPASS_BH                 10
-#define HAL_COMPASS_QFLIGHT            11
-#define HAL_COMPASS_QURT               12
 #define HAL_COMPASS_BBBMINI            13
 #define HAL_COMPASS_NAVIO2             14
 #define HAL_COMPASS_NAVIO              15
@@ -133,6 +126,8 @@
 #define HAL_COMPASS_LIS3MDL            19
 #define HAL_COMPASS_MAG3110            20
 #define HAL_COMPASS_BMM150_I2C         21
+#define HAL_COMPASS_QMC5883L           22
+#define HAL_COMPASS_IST8310            23
 
 /* Heat Types */
 #define HAL_LINUX_HEAT_PWM 1
@@ -159,20 +154,14 @@
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     #include <AP_HAL/board/sitl.h>
-#elif CONFIG_HAL_BOARD == HAL_BOARD_PX4
-    #include <AP_HAL/board/px4.h>
 #elif CONFIG_HAL_BOARD == HAL_BOARD_LINUX
     #include <AP_HAL/board/linux.h>
 #elif CONFIG_HAL_BOARD == HAL_BOARD_EMPTY
     #include <AP_HAL/board/empty.h>
-#elif CONFIG_HAL_BOARD == HAL_BOARD_QURT
-    #include <AP_HAL/board/qurt.h>
 #elif CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
     #include <AP_HAL/board/vrbrain.h>
 #elif CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
 	#include <AP_HAL/board/chibios.h>
-#elif CONFIG_HAL_BOARD == HAL_BOARD_F4LIGHT
-    #include <AP_HAL/board/f4light.h>
 #else
 #error "Unknown CONFIG_HAL_BOARD type"
 #endif
@@ -205,8 +194,16 @@
 #define HAL_WITH_UAVCAN 0
 #endif
 
+#ifndef HAL_RCINPUT_WITH_AP_RADIO
+#define HAL_RCINPUT_WITH_AP_RADIO 0
+#endif
+
 #ifndef HAL_WITH_IO_MCU
 #define HAL_WITH_IO_MCU 0
+#endif
+
+#ifndef HAL_HAVE_GETTIME_SETTIME
+#define HAL_HAVE_GETTIME_SETTIME 0
 #endif
 
 // this is used as a general mechanism to make a 'small' build by
@@ -250,4 +247,7 @@
 #define AP_MODULE_SUPPORTED 0
 #endif
 
+#ifndef HAL_SUPPORT_RCOUT_SERIAL
+#define HAL_SUPPORT_RCOUT_SERIAL 0
+#endif
 

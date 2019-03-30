@@ -24,7 +24,7 @@ void Sub::init_ardupilot()
 
     hal.console->printf("\n\nInit %s"
                         "\n\nFree RAM: %u\n",
-                        fwver.fw_string,
+                        AP::fwversion().fw_string,
                         (unsigned)hal.util->available_memory());
 
     // load parameters from EEPROM
@@ -64,7 +64,7 @@ void Sub::init_ardupilot()
 #endif
 
     // initialise notify system
-    notify.init(true);
+    notify.init();
 
     // initialise battery monitor
     battery.init();
@@ -85,14 +85,12 @@ void Sub::init_ardupilot()
     log_init();
 #endif
 
-    gcs().set_dataflash(&DataFlash);
+    // initialise rc channels including setting mode
+    rc().init();
 
     init_rc_in();               // sets up rc channels from radio
     init_rc_out();              // sets up motors and output to escs
     init_joystick();            // joystick initialization
-
-    // initialise which outputs Servo and Relay events can use
-    ServoRelayEvents.set_channel_mask(~motors.get_motor_mask());
 
     relay.init();
 
@@ -116,14 +114,14 @@ void Sub::init_ardupilot()
 #endif
 
     // init Location class
-    Location_Class::set_ahrs(&ahrs);
 #if AP_TERRAIN_AVAILABLE && AC_TERRAIN
-    Location_Class::set_terrain(&terrain);
+    Location::set_terrain(&terrain);
     wp_nav.set_terrain(&terrain);
 #endif
 
 #if AVOIDANCE_ENABLED == ENABLED
     wp_nav.set_avoidance(&avoid);
+    loiter_nav.set_avoidance(&avoid);
 #endif
 
     pos_control.set_dt(MAIN_LOOP_SECONDS);
@@ -143,7 +141,8 @@ void Sub::init_ardupilot()
 #endif
 
     // Init baro and determine if we have external (depth) pressure sensor
-    init_barometer(false);
+    barometer.set_log_baro_bit(MASK_LOG_IMU);
+    barometer.calibrate(false);
     barometer.update();
 
     for (uint8_t i = 0; i < barometer.num_instances(); i++) {
@@ -184,11 +183,18 @@ void Sub::init_ardupilot()
     // initialise mission library
     mission.init();
 
-    // initialise DataFlash library
-    DataFlash.set_mission(&mission);
-    DataFlash.setVehicle_Startup_Log_Writer(FUNCTOR_BIND(&sub, &Sub::Log_Write_Vehicle_Startup_Messages, void));
+    // initialise AP_Logger library
+#if LOGGING_ENABLED == ENABLED
+    logger.setVehicle_Startup_Writer(FUNCTOR_BIND(&sub, &Sub::Log_Write_Vehicle_Startup_Messages, void));
+#endif
 
     startup_INS_ground();
+
+#ifdef ENABLE_SCRIPTING
+    if (!g2.scripting.init()) {
+        gcs().send_text(MAV_SEVERITY_ERROR, "Scripting failed to start");
+    }
+#endif // ENABLE_SCRIPTING
 
     // we don't want writes to the serial port to cause us to pause
     // mid-flight, so set the serial ports non-blocking once we are
@@ -199,9 +205,6 @@ void Sub::init_ardupilot()
     mainloop_failsafe_enable();
 
     ins.set_log_raw_bit(MASK_LOG_IMU_RAW);
-
-    // init vehicle capabilties
-    init_capabilities();
 
     // disable safety if requested
     BoardConfig.init_safety();    
@@ -230,20 +233,6 @@ void Sub::startup_INS_ground()
 }
 
 // calibrate gyros - returns true if successfully calibrated
-bool Sub::calibrate_gyros()
-{
-    // gyro offset calibration
-    sub.ins.init_gyro();
-
-    // reset ahrs gyro bias
-    if (sub.ins.gyro_calibrated_ok_all()) {
-        sub.ahrs.reset_gyro_drift();
-        return true;
-    }
-
-    return false;
-}
-
 // position_ok - returns true if the horizontal absolute position is ok and home position is set
 bool Sub::position_ok()
 {
@@ -270,10 +259,10 @@ bool Sub::ekf_position_ok()
     // if disarmed we accept a predicted horizontal position
     if (!motors.armed()) {
         return ((filt_status.flags.horiz_pos_abs || filt_status.flags.pred_horiz_pos_abs));
-    } else {
-        // once armed we require a good absolute position and EKF must not be in const_pos_mode
-        return (filt_status.flags.horiz_pos_abs && !filt_status.flags.const_pos_mode);
     }
+
+    // once armed we require a good absolute position and EKF must not be in const_pos_mode
+    return (filt_status.flags.horiz_pos_abs && !filt_status.flags.const_pos_mode);
 }
 
 // optflow_position_ok - returns true if optical flow based position estimate is ok
@@ -293,9 +282,8 @@ bool Sub::optflow_position_ok()
     // if disarmed we accept a predicted horizontal relative position
     if (!motors.armed()) {
         return (filt_status.flags.pred_horiz_pos_rel);
-    } else {
-        return (filt_status.flags.horiz_pos_rel && !filt_status.flags.const_pos_mode);
     }
+    return (filt_status.flags.horiz_pos_rel && !filt_status.flags.const_pos_mode);
 #endif
 }
 
@@ -305,8 +293,8 @@ bool Sub::optflow_position_ok()
 bool Sub::should_log(uint32_t mask)
 {
 #if LOGGING_ENABLED == ENABLED
-    ap.logging_started = DataFlash.logging_started();
-    return DataFlash.should_log(mask);
+    ap.logging_started = logger.logging_started();
+    return logger.should_log(mask);
 #else
     return false;
 #endif

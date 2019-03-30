@@ -1,45 +1,6 @@
 #include "Copter.h"
 
-// get_smoothing_gain - returns smoothing gain to be passed into attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw
-//      result is a number from 2 to 12 with 2 being very sluggish and 12 being very crisp
-float Copter::get_smoothing_gain()
-{
-    return (2.0f + (float)g.rc_feel_rp/10.0f);
-}
-
-// get_pilot_desired_angle - transform pilot's roll or pitch input into a desired lean angle
-// returns desired angle in centi-degrees
-void Copter::get_pilot_desired_lean_angles(float roll_in, float pitch_in, float &roll_out, float &pitch_out, float angle_max)
-{
-    // sanity check angle max parameter
-    aparm.angle_max = constrain_int16(aparm.angle_max,1000,8000);
-
-    // limit max lean angle
-    angle_max = constrain_float(angle_max, 1000, aparm.angle_max);
-
-    // scale roll_in, pitch_in to ANGLE_MAX parameter range
-    float scaler = aparm.angle_max/(float)ROLL_PITCH_YAW_INPUT_MAX;
-    roll_in *= scaler;
-    pitch_in *= scaler;
-
-    // do circular limit
-    float total_in = norm(pitch_in, roll_in);
-    if (total_in > angle_max) {
-        float ratio = angle_max / total_in;
-        roll_in *= ratio;
-        pitch_in *= ratio;
-    }
-
-    // do lateral tilt to euler roll conversion
-    roll_in = (18000/M_PI) * atanf(cosf(pitch_in*(M_PI/18000))*tanf(roll_in*(M_PI/18000)));
-
-    // return
-    roll_out = roll_in;
-    pitch_out = pitch_in;
-}
-
-// get_pilot_desired_heading - transform pilot's yaw input into a
-// desired yaw rate
+// transform pilot's yaw input into a desired yaw rate
 // returns desired yaw rate in centi-degrees per second
 float Copter::get_pilot_desired_yaw_rate(int16_t stick_angle)
 {
@@ -65,36 +26,6 @@ float Copter::get_pilot_desired_yaw_rate(int16_t stick_angle)
     }
     // convert pilot input to the desired yaw rate
     return yaw_request;
-}
-
-/*************************************************************
- * yaw controllers
- *************************************************************/
-
-// get_roi_yaw - returns heading towards location held in roi_WP
-// should be called at 100hz
-float Copter::get_roi_yaw()
-{
-    static uint8_t roi_yaw_counter = 0;     // used to reduce update rate to 100hz
-
-    roi_yaw_counter++;
-    if (roi_yaw_counter >= 4) {
-        roi_yaw_counter = 0;
-        yaw_look_at_WP_bearing = get_bearing_cd(inertial_nav.get_position(), roi_WP);
-    }
-
-    return yaw_look_at_WP_bearing;
-}
-
-float Copter::get_look_ahead_yaw()
-{
-    const Vector3f& vel = inertial_nav.get_velocity();
-    float speed = norm(vel.x,vel.y);
-    // Commanded Yaw to automatically look ahead.
-    if (position_ok() && (speed > YAW_LOOK_AHEAD_MIN_SPEED)) {
-        yaw_look_ahead_bearing = degrees(atan2f(vel.y,vel.x))*100.0f;
-    }
-    return yaw_look_ahead_bearing;
 }
 
 /*************************************************************
@@ -125,7 +56,7 @@ void Copter::update_throttle_hover()
     float throttle = motors->get_throttle();
 
     // calc average throttle if we are in a level hover
-    if (throttle > 0.0f && abs(climb_rate) < 60 && labs(ahrs.roll_sensor) < 500 && labs(ahrs.pitch_sensor) < 500) {
+    if (throttle > 0.0f && abs(inertial_nav.get_velocity_z()) < 60 && labs(ahrs.roll_sensor) < 500 && labs(ahrs.pitch_sensor) < 500) {
         // Can we set the time constant automatically
         motors->update_throttle_hover(0.01f);
     }
@@ -137,44 +68,6 @@ void Copter::set_throttle_takeoff()
 {
     // tell position controller to reset alt target and reset I terms
     pos_control->init_takeoff();
-}
-
-// transform pilot's manual throttle input to make hover throttle mid stick
-// used only for manual throttle modes
-// thr_mid should be in the range 0 to 1
-// returns throttle output 0 to 1
-float Copter::get_pilot_desired_throttle(int16_t throttle_control, float thr_mid)
-{
-    if (thr_mid <= 0.0f) {
-        thr_mid = motors->get_throttle_hover();
-    }
-
-    int16_t mid_stick = get_throttle_mid();
-    // protect against unlikely divide by zero
-    if (mid_stick <= 0) {
-        mid_stick = 500;
-    }
-
-    // ensure reasonable throttle values
-    throttle_control = constrain_int16(throttle_control,0,1000);
-
-    // calculate normalised throttle input
-    float throttle_in;
-    if (throttle_control < mid_stick) {
-        // below the deadband
-        throttle_in = ((float)throttle_control)*0.5f/(float)mid_stick;
-    }else if(throttle_control > mid_stick) {
-        // above the deadband
-        throttle_in = 0.5f + ((float)(throttle_control-mid_stick)) * 0.5f / (float)(1000-mid_stick);
-    }else{
-        // must be in the deadband
-        throttle_in = 0.5f;
-    }
-
-    float expo = constrain_float(-(thr_mid-0.5)/0.375, -0.5f, 1.0f);
-    // calculate the output throttle using the given expo function
-    float throttle_out = throttle_in*(1.0f-expo) + expo*throttle_in*throttle_in*throttle_in;
-    return throttle_out;
 }
 
 // get_pilot_desired_climb_rate - transform pilot's throttle input to climb rate in cm/s
@@ -231,12 +124,19 @@ float Copter::get_non_takeoff_throttle()
 float Copter::get_surface_tracking_climb_rate(int16_t target_rate, float current_alt_target, float dt)
 {
 #if RANGEFINDER_ENABLED == ENABLED
+    if (!copter.rangefinder_alt_ok()) {
+        // if rangefinder is not ok, do not use surface tracking
+        return target_rate;
+    }
+
     static uint32_t last_call_ms = 0;
     float distance_error;
     float velocity_correction;
     float current_alt = inertial_nav.get_altitude();
 
     uint32_t now = millis();
+
+    target_rangefinder_alt_used = true;
 
     // reset target altitude if this controller has just been engaged
     if (now - last_call_ms > RANGEFINDER_TIMEOUT_MS) {
@@ -291,7 +191,7 @@ float Copter::get_surface_tracking_climb_rate(int16_t target_rate, float current
 float Copter::get_avoidance_adjusted_climbrate(float target_rate)
 {
 #if AC_AVOID_ENABLED == ENABLED
-    avoid.adjust_velocity_z(pos_control->get_pos_z_p().kP(), pos_control->get_accel_z(), target_rate, G_Dt);
+    avoid.adjust_velocity_z(pos_control->get_pos_z_p().kP(), pos_control->get_max_accel_z(), target_rate, G_Dt);
     return target_rate;
 #else
     return target_rate;

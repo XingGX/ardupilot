@@ -24,17 +24,18 @@ void Plane::init_ardupilot()
 
     hal.console->printf("\n\nInit %s"
                         "\n\nFree RAM: %u\n",
-                        fwver.fw_string,
+                        AP::fwversion().fw_string,
                         (unsigned)hal.util->available_memory());
-
 
     //
     // Check the EEPROM format version before loading any parameters from EEPROM
     //
     load_parameters();
 
+#if STATS_ENABLED == ENABLED
     // initialise stats module
     g2.stats.init();
+#endif
 
 #if HIL_SUPPORT
     if (g.hil_mode == 1) {
@@ -48,22 +49,6 @@ void Plane::init_ardupilot()
     ins.set_log_raw_bit(MASK_LOG_IMU_RAW);
 
     set_control_channels();
-    
-#if HAVE_PX4_MIXER
-    if (!quadplane.enable) {
-        // this must be before BoardConfig.init() so if
-        // BRD_SAFETYENABLE==0 then we don't have safety off yet. For
-        // quadplanes we wait till AP_Motors is initialised
-        for (uint8_t tries=0; tries<10; tries++) {
-            if (setup_failsafe_mixing()) {
-                break;
-            }
-            hal.scheduler->delay(10);
-        }
-    }
-#endif
-
-    gcs().set_dataflash(&DataFlash);
 
     mavlink_system.sysid = g.sysid_this_mav;
 
@@ -82,17 +67,17 @@ void Plane::init_ardupilot()
     BoardConfig_CAN.init();
 #endif
 
+    // initialise rc channels including setting mode
+    rc().init();
+
     relay.init();
 
     // initialise notify system
-    notify.init(false);
+    notify.init();
     notify_flight_mode(control_mode);
 
     init_rc_out_main();
     
-    // allow servo set on all channels except first 4
-    ServoRelayEvents.set_channel_mask(0xFFF0);
-
     // keep a record of how many resets have happened. This can be
     // used to detect in-flight resets
     g.num_resets.set_and_save(g.num_resets+1);
@@ -101,7 +86,7 @@ void Plane::init_ardupilot()
     barometer.init();
 
     // initialise rangefinder
-    init_rangefinder();
+    rangefinder.init();
 
     // initialise battery monitoring
     battery.init();
@@ -111,12 +96,8 @@ void Plane::init_ardupilot()
     // setup telem slots with serial ports
     gcs().setup_uarts(serial_manager);
 
-    // setup frsky
-#if FRSKY_TELEM_ENABLED == ENABLED
-    // setup frsky, and pass a number of parameters to the library
-    frsky_telemetry.init(serial_manager, fwver.fw_string,
-                         MAV_TYPE_FIXED_WING,
-                         &g.fs_batt_voltage, &g.fs_batt_mah);
+#if OSD_ENABLED == ENABLED
+    osd.init();
 #endif
 
 #if LOGGING_ENABLED == ENABLED
@@ -127,7 +108,8 @@ void Plane::init_ardupilot()
     airspeed.init();
 
     if (g.compass_enabled==true) {
-        bool compass_ok = compass.init() && compass.read();
+        compass.init();
+        bool compass_ok = compass.read();
 #if HIL_SUPPORT
     if (g.hil_mode != 0) {
         compass_ok = true;
@@ -162,6 +144,13 @@ void Plane::init_ardupilot()
     camera_mount.init(serial_manager);
 #endif
 
+#if LANDING_GEAR_ENABLED == ENABLED
+    // initialise landing gear position
+    g2.landing_gear.init();
+    gear.last_auto_cmd = -1;
+    gear.last_cmd = -1;
+#endif
+
 #if FENCE_TRIGGERED_PIN > 0
     hal.gpio->pinMode(FENCE_TRIGGERED_PIN, HAL_GPIO_OUTPUT);
     hal.gpio->write(FENCE_TRIGGERED_PIN, 0);
@@ -173,11 +162,9 @@ void Plane::init_ardupilot()
      */
     hal.scheduler->register_timer_failsafe(failsafe_check_static, 1000);
 
-    init_capabilities();
-
     quadplane.setup();
 
-    AP_Param::reload_defaults_file();
+    AP_Param::reload_defaults_file(true);
     
     startup_ground();
 
@@ -197,8 +184,13 @@ void Plane::init_ardupilot()
     // initialise sensor
 #if OPTFLOW == ENABLED
     if (optflow.enabled()) {
-        optflow.init();
+        optflow.init(-1);
     }
+#endif
+
+// init cargo gripper
+#if GRIPPER_ENABLED == ENABLED
+    g2.gripper.init();
 #endif
 
     // disable safety if requested
@@ -231,11 +223,18 @@ void Plane::startup_ground(void)
     // initialise mission library
     mission.init();
 
-    // initialise DataFlash library
-    DataFlash.set_mission(&mission);
-    DataFlash.setVehicle_Startup_Log_Writer(
+    // initialise AP_Logger library
+#if LOGGING_ENABLED == ENABLED
+    logger.setVehicle_Startup_Writer(
         FUNCTOR_BIND(&plane, &Plane::Log_Write_Vehicle_Startup_Messages, void)
         );
+#endif
+
+#ifdef ENABLE_SCRIPTING
+    if (!g2.scripting.init()) {
+        gcs().send_text(MAV_SEVERITY_ERROR, "Scripting failed to start");
+    }
+#endif // ENABLE_SCRIPTING
 
     // reset last heartbeat time, so we don't trigger failsafe on slow
     // startup
@@ -255,13 +254,21 @@ enum FlightMode Plane::get_previous_mode() {
 
 void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
 {
+#if !QAUTOTUNE_ENABLED
+    if (mode == QAUTOTUNE) {
+        gcs().send_text(MAV_SEVERITY_INFO,"QAUTOTUNE disabled");
+        mode = QHOVER;
+    }
+#endif
+
     if(control_mode == mode) {
         // don't switch modes if we are already in the correct mode.
         return;
     }
 
-    if(g.auto_trim > 0 && control_mode == MANUAL)
-        trim_control_surfaces();
+    if(g.auto_trim > 0 && control_mode == MANUAL) {
+        trim_radio();
+    }
 
     // perform any cleanup required for prev flight mode
     exit_mode(control_mode);
@@ -292,9 +299,6 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
     previous_mode_reason = control_mode_reason;
     control_mode_reason = reason;
 
-#if FRSKY_TELEM_ENABLED == ENABLED
-    frsky_telemetry.update_control_mode(control_mode);
-#endif
 #if CAMERA == ENABLED
     camera.set_is_auto_mode(control_mode == AUTO);
 #endif
@@ -362,9 +366,11 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
         auto_navigation_mode = false;
         cruise_state.locked_heading = false;
         cruise_state.lock_timer_ms = 0;
-        
+
+#if SOARING_ENABLED == ENABLED
         // for ArduSoar soaring_controller
         g2.soaring_controller.init_cruising();
+#endif
         
         set_target_altitude_current();
         break;
@@ -373,9 +379,11 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
         throttle_allows_nudging = false;
         auto_throttle_mode = true;
         auto_navigation_mode = false;
-        
+
+#if SOARING_ENABLED == ENABLED
         // for ArduSoar soaring_controller
         g2.soaring_controller.init_cruising();
+#endif
 
         set_target_altitude_current();
         break;
@@ -400,8 +408,10 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
         next_WP_loc = prev_WP_loc = current_loc;
         // start or resume the mission, based on MIS_AUTORESET
         mission.start_or_resume();
-		
+
+#if SOARING_ENABLED == ENABLED
         g2.soaring_controller.init_cruising();
+#endif
         break;
 
     case RTL:
@@ -417,12 +427,14 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
         auto_throttle_mode = true;
         auto_navigation_mode = true;
         do_loiter_at_location();
-		
+
+#if SOARING_ENABLED == ENABLED		
         if (g2.soaring_controller.is_active() &&
             g2.soaring_controller.suppress_throttle()) {
 			g2.soaring_controller.init_thermalling();
 			g2.soaring_controller.get_target(next_WP_loc); // ahead on flight path
 		}
+#endif
 		
         break;
 
@@ -445,6 +457,8 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
     case QLOITER:
     case QLAND:
     case QRTL:
+    case QAUTOTUNE:
+    case QACRO:
         throttle_allows_nudging = true;
         auto_navigation_mode = false;
         if (!quadplane.init_mode()) {
@@ -461,20 +475,24 @@ void Plane::set_mode(enum FlightMode mode, mode_reason_t reason)
 
     adsb.set_is_auto_mode(auto_navigation_mode);
 
-    DataFlash.Log_Write_Mode(control_mode, control_mode_reason);
+    logger.Write_Mode(control_mode, control_mode_reason);
 
     // update notify with flight mode change
     notify_flight_mode(control_mode);
 
     // reset steering integrator on mode change
     steerController.reset_I();    
+
+    // update RC failsafe, as mode change may have necessitated changing the failsafe throttle
+    control_failsafe();
 }
 
 // exit_mode - perform any cleanup required when leaving a flight mode
 void Plane::exit_mode(enum FlightMode mode)
 {
     // stop mission when we leave auto
-    if (mode == AUTO) {
+    switch (mode) {
+    case AUTO:
         if (mission.state() == AP_Mission::MISSION_RUNNING) {
             mission.stop();
 
@@ -485,6 +503,14 @@ void Plane::exit_mode(enum FlightMode mode)
             }
         }
         auto_state.started_flying_in_auto_ms = 0;
+        break;
+#if QAUTOTUNE_ENABLED
+    case QAUTOTUNE:
+        quadplane.qautotune.stop();
+        break;
+#endif
+    default:
+        break;
     }
 }
 
@@ -581,12 +607,13 @@ void Plane::startup_INS_ground(void)
 
     // read Baro pressure at ground
     //-----------------------------
-    init_barometer(true);
+    barometer.set_log_baro_bit(MASK_LOG_IMU);
+    barometer.calibrate();
 
     if (airspeed.enabled()) {
         // initialize airspeed sensor
         // --------------------------
-        zero_airspeed(true);
+        airspeed.calibrate(true);
     } else {
         gcs().send_text(MAV_SEVERITY_WARNING,"No airspeed");
     }
@@ -666,6 +693,9 @@ void Plane::notify_flight_mode(enum FlightMode mode)
     case QRTL:
         notify.set_flight_mode_str("QRTL");
         break;
+    case QAUTOTUNE:
+        notify.set_flight_mode_str("QAUTOTUNE");
+        break;
     default:
         notify.set_flight_mode_str("----");
         break;
@@ -678,7 +708,7 @@ void Plane::notify_flight_mode(enum FlightMode mode)
 bool Plane::should_log(uint32_t mask)
 {
 #if LOGGING_ENABLED == ENABLED
-    return DataFlash.should_log(mask);
+    return logger.should_log(mask);
 #else
     return false;
 #endif
@@ -692,15 +722,11 @@ int8_t Plane::throttle_percentage(void)
     if (quadplane.in_vtol_mode()) {
         return quadplane.throttle_percentage();
     }
-    // to get the real throttle we need to use norm_output() which
-    // returns a number from -1 to 1.
-    float throttle = SRV_Channels::get_output_norm(SRV_Channel::k_throttle);
-    if (aparm.throttle_min >= 0) {
-        return constrain_int16(50*(throttle+1), 0, 100);
-    } else {
-        // reverse thrust
-        return constrain_int16(100*throttle, -100, 100);
+    float throttle = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
+    if (!have_reverse_thrust()) {
+        return constrain_int16(throttle, 0, 100);
     }
+    return constrain_int16(throttle, -100, 100);
 }
 
 /*
@@ -716,9 +742,9 @@ void Plane::change_arm_state(void)
 /*
   arm motors
  */
-bool Plane::arm_motors(AP_Arming::ArmingMethod method)
+bool Plane::arm_motors(const AP_Arming::Method method, const bool do_arming_checks)
 {
-    if (!arming.arm(method)) {
+    if (!arming.arm(method, do_arming_checks)) {
         return false;
     }
 
@@ -748,5 +774,10 @@ bool Plane::disarm_motors(void)
     // reload target airspeed which could have been modified by a mission
     plane.aparm.airspeed_cruise_cm.load();
     
+#if QAUTOTUNE_ENABLED
+    //save qautotune gains if enabled and success
+    quadplane.qautotune.save_tuning_gains();
+#endif
+
     return true;
 }

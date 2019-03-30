@@ -131,8 +131,7 @@ const AP_Param::GroupInfo SoaringController::var_info[] = {
 SoaringController::SoaringController(AP_AHRS &ahrs, AP_SpdHgtControl &spdHgt, const AP_Vehicle::FixedWing &parms) :
     _ahrs(ahrs),
     _spdHgt(spdHgt),
-    _aparm(parms),
-    _vario(ahrs,spdHgt,parms),
+    _vario(ahrs,parms),
     _loiter_rad(parms.loiter_radius),
     _throttle_suppressed(true)
 {
@@ -142,7 +141,7 @@ SoaringController::SoaringController(AP_AHRS &ahrs, AP_SpdHgtControl &spdHgt, co
 void SoaringController::get_target(Location &wp)
 {
     wp = _prev_update_location;
-    location_offset(wp, _ekf.X[2], _ekf.X[3]);
+    wp.offset(_ekf.X[2], _ekf.X[3]);
 }
 
 bool SoaringController::suppress_throttle()
@@ -280,7 +279,7 @@ void SoaringController::update_thermalling()
 #endif
 
         // write log - save the data.
-        DataFlash_Class::instance()->Log_Write("SOAR", "TimeUS,nettorate,dx,dy,x0,x1,x2,x3,lat,lng,alt,dx_w,dy_w", "QfffffffLLfff", 
+        AP::logger().Write("SOAR", "TimeUS,nettorate,dx,dy,x0,x1,x2,x3,lat,lng,alt,dx_w,dy_w", "QfffffffLLfff", 
                                                AP_HAL::micros64(),
                                                (double)_vario.reading,
                                                (double)dx,
@@ -332,5 +331,5 @@ bool SoaringController::is_active() const
         return true;
     }
     // active when above 1700
-    return hal.rcin->read(soar_active_ch-1) >= 1700;
+    return RC_Channels::get_radio_in(soar_active_ch-1) >= 1700;
 }

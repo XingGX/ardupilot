@@ -59,7 +59,7 @@ bool AP_BattMonitor_SMBus::read_remaining_capacity(void)
     if (capacity > 0) {
         uint16_t data;
         if (read_word(BATTMONITOR_SMBUS_REMAINING_CAPACITY, data)) {
-            _state.current_total_mah = MAX(0, capacity - data);
+            _state.consumed_mah = MAX(0, capacity - data);
             return true;
         }
     }
@@ -133,7 +133,7 @@ uint8_t AP_BattMonitor_SMBus::get_PEC(const uint8_t i2c_addr, uint8_t cmd, bool 
         return 0;
     }
 
-    // prepare temp buffer for calcing crc
+    // prepare temp buffer for calculating crc
     uint8_t tmp_buff[len+3];
     tmp_buff[0] = i2c_addr << 1;
     tmp_buff[1] = cmd;
