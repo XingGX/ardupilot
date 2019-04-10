@@ -11,18 +11,13 @@
 #include <stdint.h>
 #include "MAVLink_routing.h"
 #include <AP_SerialManager/AP_SerialManager.h>
-#include <AP_Mount/AP_Mount.h>
 #include <AP_Avoidance/AP_Avoidance.h>
-#include <AP_Proximity/AP_Proximity.h>
 #include <AP_Frsky_Telem/AP_Frsky_Telem.h>
-#include <AP_ServoRelayEvents/AP_ServoRelayEvents.h>
-#include <AP_Camera/AP_Camera.h>
 #include <AP_AdvancedFailsafe/AP_AdvancedFailsafe.h>
-#include <AP_VisualOdom/AP_VisualOdom.h>
-#include <AP_Common/AP_FWVersion.h>
 #include <AP_RTC/JitterCorrection.h>
 #include <AP_Common/Bitmask.h>
 #include <AP_Devo_Telem/AP_Devo_Telem.h>
+#include <RC_Channel/RC_Channel.h>
 
 #define GCS_DEBUG_SEND_MESSAGE_TIMINGS 0
 
@@ -431,6 +426,8 @@ protected:
     MAV_RESULT handle_command_do_set_mode(const mavlink_command_long_t &packet);
     MAV_RESULT handle_command_get_home_position(const mavlink_command_long_t &packet);
     MAV_RESULT handle_command_do_fence_enable(const mavlink_command_long_t &packet);
+
+    void handle_optical_flow(const mavlink_message_t* msg);
 
     // vehicle-overridable message send function
     virtual bool try_send_message(enum ap_message id);

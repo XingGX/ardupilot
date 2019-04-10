@@ -36,6 +36,8 @@
   #endif
 #endif
 
+#include <AP_Logger/AP_Logger.h>
+
 #define AP_ARMING_COMPASS_MAGFIELD_EXPECTED 530
 #define AP_ARMING_COMPASS_MAGFIELD_MIN  185     // 0.35 * 530 milligauss
 #define AP_ARMING_COMPASS_MAGFIELD_MAX  875     // 1.65 * 530 milligauss
@@ -432,7 +434,7 @@ bool AP_Arming::gps_checks(bool report)
         const Location gps_loc = gps.location();
         Location ahrs_loc;
         if (AP::ahrs().get_position(ahrs_loc)) {
-            const float distance = location_diff(gps_loc, ahrs_loc).length();
+            const float distance = gps_loc.get_distance(ahrs_loc);
             if (distance > AP_ARMING_AHRS_GPS_ERROR_MAX) {
                 check_failed(ARMING_CHECK_GPS, report, "GPS and AHRS differ by %4.1fm", (double)distance);
                 return false;

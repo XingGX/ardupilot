@@ -989,7 +989,7 @@ bool AP_AHRS_DCM::get_position(struct Location &loc) const
     if (_flags.fly_forward && _have_position) {
         float gps_delay_sec = 0;
         _gps.get_lag(gps_delay_sec);
-        location_update(loc, _gps.ground_course_cd() * 0.01f, _gps.ground_speed() * gps_delay_sec);
+        loc.offset_bearing(_gps.ground_course_cd() * 0.01f, _gps.ground_speed() * gps_delay_sec);
     }
     return _have_position;
 }
@@ -1037,7 +1037,7 @@ bool AP_AHRS_DCM::set_home(const Location &loc)
     if (loc.lat == 0 && loc.lng == 0 && loc.alt == 0) {
         return false;
     }
-    if (!check_latlng(loc)) {
+    if (!loc.check_latlng()) {
         return false;
     }
     // home must always be global frame at the moment as .alt is

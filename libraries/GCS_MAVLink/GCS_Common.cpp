@@ -22,11 +22,16 @@
 #include <AP_Vehicle/AP_Vehicle.h>
 #include <AP_RangeFinder/RangeFinder_Backend.h>
 #include <AP_Airspeed/AP_Airspeed.h>
+#include <AP_Camera/AP_Camera.h>
 #include <AP_Gripper/AP_Gripper.h>
 #include <AP_BLHeli/AP_BLHeli.h>
 #include <AP_Common/Semaphore.h>
+#include <AP_RSSI/AP_RSSI.h>
 #include <AP_Scheduler/AP_Scheduler.h>
+#include <AP_Mount/AP_Mount.h>
+#include <AP_Common/AP_FWVersion.h>
 #include <AP_VisualOdom/AP_VisualOdom.h>
+#include <AP_OpticalFlow/OpticalFlow.h>
 
 #include "GCS.h"
 
@@ -1323,7 +1328,7 @@ bool GCS_MAVLINK::set_ap_message_interval(enum ap_message id, uint16_t interval_
     // send messages out at most 80% of main loop rate
     if (interval_ms != 0 &&
         interval_ms*800 < AP::scheduler().get_loop_period_us()) {
-        interval_ms = AP::scheduler().get_loop_period_us()/800.0;
+        interval_ms = AP::scheduler().get_loop_period_us()/800.0f;
     }
 
     // check if it's a specially-handled message:
@@ -1809,7 +1814,7 @@ void GCS_MAVLINK::send_scaled_pressure_instance(uint8_t instance, void (*send_fn
     float press_diff = 0; // pascal
     AP_Airspeed *airspeed = AP_Airspeed::get_singleton();
     if (airspeed != nullptr &&
-        instance < AIRSPEED_MAX_SENSORS) {
+        airspeed->enabled(instance)) {
         press_diff = airspeed->get_differential_pressure(instance) * 0.01f;
         have_data = true;
     }
@@ -2772,7 +2777,7 @@ MAV_RESULT GCS_MAVLINK::handle_command_camera(const mavlink_command_long_t &pack
 void GCS_MAVLINK::set_ekf_origin(const Location& loc)
 {
     // check location is valid
-    if (!check_latlng(loc)) {
+    if (!loc.check_latlng()) {
         return;
     }
 
@@ -3011,6 +3016,17 @@ void GCS_MAVLINK::handle_rc_channels_override(const mavlink_message_t *msg)
     RC_Channels::set_override(15, packet.chan16_raw, tnow);
 }
 
+// allow override of RC channel values for HIL or for complete GCS
+// control of switch position and RC PWM values.
+void GCS_MAVLINK::handle_optical_flow(const mavlink_message_t *msg)
+{
+    OpticalFlow *optflow = AP::opticalflow();
+    if (optflow == nullptr) {
+        return;
+    }
+    optflow->handle_msg(msg);
+}
+
 /*
   handle messages which don't require vehicle specific data
  */
@@ -3176,6 +3192,10 @@ void GCS_MAVLINK::handle_common_message(mavlink_message_t *msg)
     case MAVLINK_MSG_ID_RC_CHANNELS_OVERRIDE:
         handle_rc_channels_override(msg);
         break;
+
+    case MAVLINK_MSG_ID_OPTICAL_FLOW:
+        handle_optical_flow(msg);
+        break;
     }
 }
 
@@ -3312,7 +3332,7 @@ MAV_RESULT GCS_MAVLINK::handle_command_preflight_set_sensor_offsets(const mavlin
     if (compassNumber == (uint8_t) -1) {
         return MAV_RESULT_FAILED;
     }
-    compass.set_and_save_offsets(compassNumber, packet.param2, packet.param3, packet.param4);
+    compass.set_and_save_offsets(compassNumber, Vector3f(packet.param2, packet.param3, packet.param4));
     return MAV_RESULT_ACCEPTED;
 }
 
@@ -3712,7 +3732,7 @@ MAV_RESULT GCS_MAVLINK::handle_command_do_set_roi(const Location &roi_loc)
     }
 
     // sanity check location
-    if (!check_latlng(roi_loc)) {
+    if (!roi_loc.check_latlng()) {
         return MAV_RESULT_FAILED;
     }
 

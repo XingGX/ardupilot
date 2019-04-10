@@ -77,6 +77,7 @@
 #include <AP_SmartRTL/AP_SmartRTL.h>
 #include <AP_TempCalibration/AP_TempCalibration.h>
 #include <AC_AutoTune/AC_AutoTune.h>
+#include <AP_Common/AP_FWVersion.h>
 
 // Configuration
 #include "defines.h"
@@ -236,7 +237,7 @@ private:
     Compass compass;
     AP_InertialSensor ins;
 
-    RangeFinder rangefinder{serial_manager, ROTATION_PITCH_270};
+    RangeFinder rangefinder{serial_manager};
     struct {
         bool enabled:1;
         bool alt_healthy:1; // true if we can trust the altitude from the rangefinder
@@ -537,8 +538,7 @@ private:
     // Tradheli flags
     typedef struct {
         uint8_t dynamic_flight          : 1;    // 0   // true if we are moving at a significant speed (used to turn on/off leaky I terms)
-        uint8_t init_targets_on_arming  : 1;    // 1   // true if we have been disarmed, and need to reset rate controller targets when we arm
-        uint8_t inverted_flight         : 1;    // 2   // true for inverted flight mode
+        uint8_t inverted_flight         : 1;    // 1   // true for inverted flight mode
     } heli_flags_t;
     heli_flags_t heli_flags;
 
@@ -660,6 +660,7 @@ private:
     void esc_calibration_passthrough();
     void esc_calibration_auto();
     void esc_calibration_notify();
+    void esc_calibration_setup();
 
     // events.cpp
     void failsafe_radio_on_event();
@@ -721,7 +722,7 @@ private:
     void Log_Write_Data(uint8_t id, int16_t value);
     void Log_Write_Data(uint8_t id, uint16_t value);
     void Log_Write_Data(uint8_t id, float value);
-    void Log_Write_Parameter_Tuning(uint8_t param, float tuning_val, int16_t control_in, int16_t tune_low, int16_t tune_high);
+    void Log_Write_Parameter_Tuning(uint8_t param, float tuning_val, float tune_min, float tune_max);
     void Log_Sensor_Health();
 #if FRAME_CONFIG == HELI_FRAME
     void Log_Write_Heli(void);
@@ -786,7 +787,6 @@ private:
     void read_rangefinder(void);
     bool rangefinder_alt_ok();
     void rpm_update();
-    void init_compass();
     void init_compass_location();
     void init_optflow();
     void update_optical_flow(void);
